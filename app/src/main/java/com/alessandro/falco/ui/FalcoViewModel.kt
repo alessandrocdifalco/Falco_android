@@ -89,7 +89,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         mutable.update { it.copy(maest = MaestModelState(downloading = true, message = "Avvio download MAEST…")) }
         maestStore.download { progress -> mutable.update { it.copy(maest = progress) } }
             .onSuccess { ready -> mutable.update { it.copy(maest = ready) } }
-            .onFailure { error -> mutable.update { it.copy(maest = MaestModelState(message = error.message ?: "Download MAEST fallito")) } }
+            .onFailure { error -> mutable.update { it.copy(maest = maestStore.state().copy(message = "${error.message ?: "Download interrotto"}. Premi per riprendere.")) } }
     }
     fun removeMaest() { maestStore.remove(); mutable.update { it.copy(maest = maestStore.state()) } }
     fun loadWaveform(track: TrackEntity) = viewModelScope.launch { mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null) }; val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }; val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList()); mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) } }
