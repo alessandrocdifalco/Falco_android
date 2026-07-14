@@ -11,6 +11,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.StringReader
@@ -42,7 +44,7 @@ class WebDavClient(private val config: WebDavConfig) {
     suspend fun list(path: String): List<WebDavItem> = withContext(Dispatchers.IO) {
         val requestUrl = url(path)
         val body = """<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
-        val request = Request.Builder().url(requestUrl).header("Authorization", Credentials.basic(config.username, config.password)).header("Depth", "1").method("PROPFIND", body.toRequestBody()).build()
+        val request = Request.Builder().url(requestUrl).header("Authorization", Credentials.basic(config.username, config.password)).header("Depth", "1").method("PROPFIND", body.toRequestBody("application/xml; charset=utf-8".toMediaType())).build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful && response.code != 207) error("WebDAV HTTP ${response.code}: ${response.message}")
             parse(response.body?.string().orEmpty(), requestUrl).filterNot { normalize(it.url) == normalize(requestUrl) }
@@ -88,5 +90,3 @@ class WebDavClient(private val config: WebDavConfig) {
     }
     private fun normalize(v: String) = v.trimEnd('/').let { Uri.decode(it) }
 }
-
-private fun String.toRequestBody() = okhttp3.RequestBody.create(okhttp3.MediaType.parse("application/xml; charset=utf-8"), this)
