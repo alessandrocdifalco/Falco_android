@@ -7,7 +7,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.alessandro.falco.data.*
+import com.alessandro.falco.webdav.*
+import okhttp3.OkHttpClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -17,7 +21,8 @@ data class Filters(val genre: String? = null, val artist: String? = null, val fo
 data class UiState(
     val tracks: List<TrackEntity> = emptyList(), val query: String = "", val filters: Filters = Filters(), val sort: SortMode = SortMode.TITLE,
     val loading: Boolean = true, val scanning: Boolean = false, val scanProgress: ScanProgress? = null, val error: String? = null,
-    val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0
+    val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0,
+    val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -35,12 +40,12 @@ data class UiState(
 
 class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = MusicRepository(app)
-    private val player = ExoPlayer.Builder(app).build()
-    private val mutable = MutableStateFlow(UiState())
+    private var player = createPlayer(app, repo.webDavConfig())
+    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
     init {
         viewModelScope.launch { repo.tracks.collect { mutable.update { s -> s.copy(tracks = it, loading = false, selected = s.selected?.let { old -> it.find { n -> n.id == old.id } }) } } }
-        player.addListener(object : Player.Listener { override fun onIsPlayingChanged(v: Boolean) { mutable.update { it.copy(isPlaying = v) } } })
+        attachPlayerListener()
         viewModelScope.launch { while (true) { mutable.update { it.copy(position = player.currentPosition.coerceAtLeast(0)) }; delay(500) } }
     }
     fun folders() = repo.folders()
@@ -62,6 +67,16 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         player.setMediaItem(MediaItem.fromUri(v.uri)); player.prepare(); player.play(); mutable.update { it.copy(playing = v, position = 0) }
     }
     fun seek(v: Long) = player.seekTo(v)
+    fun saveWebDav(config: WebDavConfig) { repo.saveWebDav(config); player.release(); player = createPlayer(getApplication(), config); attachPlayerListener(); mutable.update { it.copy(webDavConfig = config, webDavMessage = "Connessione salvata") } }
+    fun testWebDav(config: WebDavConfig) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; val result = repo.testWebDav(config); mutable.update { it.copy(webDavBusy = false, webDavMessage = if (result.isSuccess) "Connessione riuscita" else result.exceptionOrNull()?.message ?: "Connessione fallita") } }
+    fun browseWebDav(path: String) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; runCatching { repo.browseWebDav(path) }.onSuccess { items -> mutable.update { it.copy(webDavItems = items, webDavPath = path, webDavBusy = false) } }.onFailure { error -> mutable.update { it.copy(webDavBusy = false, webDavMessage = "Errore WebDAV: ${error.message}") } } }
+    fun scanWebDav(path: String, recursive: Boolean) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = "Analisi WebDAV…") }; runCatching { repo.scanWebDav(path, recursive) { n, p -> mutable.update { it.copy(webDavMessage = "$n cartelle analizzate • $p") } } }.onSuccess { mutable.update { it.copy(webDavBusy = false, webDavMessage = "Scansione completata") } }.onFailure { e -> mutable.update { it.copy(webDavBusy = false, webDavMessage = "Errore: ${e.message}") } } }
+    private fun attachPlayerListener() { player.addListener(object : Player.Listener { override fun onIsPlayingChanged(v: Boolean) { mutable.update { it.copy(isPlaying = v) } } }) }
+    fun playWebDav(item: WebDavItem) = play(WebDavClient(mutable.value.webDavConfig).toTrack(item))
+    private fun createPlayer(app: Application, config: WebDavConfig): ExoPlayer {
+        val factory = OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap())
+        return ExoPlayer.Builder(app).setMediaSourceFactory(DefaultMediaSourceFactory(factory)).build()
+    }
     private fun fail(t: Throwable) = mutable.update { it.copy(error = t.message ?: "Errore imprevisto", scanning = false, loading = false) }
     override fun onCleared() { player.release(); super.onCleared() }
 }

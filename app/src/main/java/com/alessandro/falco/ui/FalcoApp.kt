@@ -15,7 +15,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alessandro.falco.ui.screens.*
 
-private enum class Destination(val label: String, val icon: ImageVector) { Dashboard("Dashboard", Icons.Default.Dashboard), Library("Libreria", Icons.Default.LibraryMusic), Analysis("Analisi", Icons.Default.Analytics), Settings("Impostazioni", Icons.Default.Settings) }
+private enum class Destination(val label: String, val icon: ImageVector) { Dashboard("Dashboard", Icons.Default.Dashboard), Review("Revisione", Icons.Default.LibraryMusic), WebDav("WebDAV", Icons.Default.Folder), More("Altro", Icons.Default.Menu) }
 
 @Composable fun FalcoApp(vm: FalcoViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -29,9 +29,9 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (destination) {
                 Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
-                Destination.Library -> LibraryScreen(state, vm::query, vm::filters, vm::sort, vm::select, vm::play, vm::toggleFavorite)
-                Destination.Analysis -> AnalysisScreen(state, vm::select)
-                Destination.Settings -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder)
+                Destination.Review -> LibraryScreen(state, vm::query, vm::filters, vm::sort, vm::select, vm::play, vm::toggleFavorite)
+                Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
+                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder)
             }
             state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
             state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }
