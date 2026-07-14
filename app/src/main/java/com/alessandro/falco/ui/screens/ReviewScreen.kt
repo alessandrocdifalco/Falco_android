@@ -46,6 +46,7 @@ import kotlin.math.abs
                 IconButton({ skip(30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
             }
             Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)} • preview da 1:00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.aiSuggestion?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.rating?.let { rating = it }; tags = tags.filterNot { it.matches(Regex("E[1-5]")) }.toSet() + "E${ai.energy}" }, label = { Text("AI locale: ${ai.genre ?: "in apprendimento"} • E${ai.energy}${ai.rating?.let { " • R$it" } ?: ""} • ${ai.confidence}%") }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) }) }
             if (classify) ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it })
         } }
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {

@@ -14,6 +14,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.alessandro.falco.data.*
 import com.alessandro.falco.webdav.*
 import com.alessandro.falco.audio.WaveformExtractor
+import com.alessandro.falco.ai.*
 import okhttp3.OkHttpClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -26,7 +27,7 @@ data class UiState(
     val loading: Boolean = true, val scanning: Boolean = false, val scanProgress: ScanProgress? = null, val error: String? = null,
     val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0,
     val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null,
-    val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false
+    val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -44,6 +45,7 @@ data class UiState(
 
 class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = MusicRepository(app)
+    private val localAi = LocalAiEngine(app)
     private var player = createPlayer(app, repo.webDavConfig())
     private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
@@ -75,10 +77,11 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     fun skip(delta: Long) = player.seekTo((player.currentPosition + delta).coerceIn(0, player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
     fun preview(v: TrackEntity) = playFrom(v, 60_000L)
     fun review(v: TrackEntity, status: String, genre: String = v.genre, rating: Int = v.rating, tags: Set<String> = v.customTags.split(',').filter { it.isNotBlank() }.toSet()) = viewModelScope.launch {
-        mutable.update { it.copy(lastReviewed = v) }; repo.update(v.copy(workStatus = status, genre = genre, rating = rating, customTags = tags.joinToString(",")))
+        val energy = tags.firstOrNull { it.matches(Regex("E[1-5]")) }?.drop(1)?.toIntOrNull() ?: mutable.value.aiSuggestion?.energy ?: 3
+        localAi.learn(v, mutable.value.waveform, genre, energy, rating); mutable.update { it.copy(lastReviewed = v) }; repo.update(v.copy(workStatus = status, genre = genre, rating = rating, customTags = tags.joinToString(",")))
     }
     fun undoReview() = viewModelScope.launch { mutable.value.lastReviewed?.let { repo.update(it); mutable.update { s -> s.copy(lastReviewed = null) } } }
-    fun loadWaveform(track: TrackEntity) = viewModelScope.launch { mutable.update { it.copy(waveform = emptyList(), waveformLoading = true) }; val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }; val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList()); mutable.update { it.copy(waveform = peaks, waveformLoading = false) } }
+    fun loadWaveform(track: TrackEntity) = viewModelScope.launch { mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null) }; val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }; val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList()); mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) } }
     fun saveWebDav(config: WebDavConfig) { repo.saveWebDav(config); player.release(); player = createPlayer(getApplication(), config); attachPlayerListener(); mutable.update { it.copy(webDavConfig = config, webDavMessage = "Connessione salvata") } }
     fun testWebDav(config: WebDavConfig) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; val result = repo.testWebDav(config); mutable.update { it.copy(webDavBusy = false, webDavMessage = if (result.isSuccess) "Connessione riuscita" else result.exceptionOrNull()?.message ?: "Connessione fallita") } }
     fun browseWebDav(path: String) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; runCatching { repo.browseWebDav(path) }.onSuccess { items -> mutable.update { it.copy(webDavItems = items, webDavPath = path, webDavBusy = false) } }.onFailure { error -> mutable.update { it.copy(webDavBusy = false, webDavMessage = "Errore WebDAV: ${error.message}") } } }
