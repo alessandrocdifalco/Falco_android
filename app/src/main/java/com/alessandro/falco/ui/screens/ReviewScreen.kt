@@ -28,7 +28,7 @@ import kotlin.math.abs
 
 @Composable fun ReviewScreen(state: UiState, preview: (TrackEntity) -> Unit, toggle: (TrackEntity) -> Unit, seek: (TrackEntity, Long) -> Unit, skip: (TrackEntity, Long) -> Unit, review: (TrackEntity, String, String, Int, Set<String>) -> Unit, undo: () -> Unit, loadWaveform: (TrackEntity) -> Unit) {
     val current = state.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
-    var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
+    var dragX by remember(current?.id) { mutableFloatStateOf(0f) }; var dragY by remember(current?.id) { mutableFloatStateOf(0f) }
     var genre by remember(current?.id) { mutableStateOf(current?.genre?.takeIf { value -> FalcoTaxonomy.genres.any { it.id == value } }.orEmpty()) }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
     var tags by remember(current?.id) { mutableStateOf(current?.customTags?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()) }
     LaunchedEffect(current?.id) { current?.let(loadWaveform) }
@@ -36,7 +36,7 @@ import kotlin.math.abs
     Column(Modifier.fillMaxSize()) {
         Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
         if (current == null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Revisione completata", style = MaterialTheme.typography.headlineSmall) }; return@Column }
-        Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        key(current.id) { Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             // Only the artwork/title surface owns the Tinder gesture. Audio navigation below remains independent.
             Box(Modifier.fillMaxWidth().weight(1f).graphicsLayer { translationX = dragX; translationY = dragY * .18f; rotationZ = dragX / 65f }.pointerInput(current.id) {
                 detectDragGestures(onDragEnd = { val action = when { dragX > 85 -> "KEEP"; dragX < -85 -> "REJECT"; dragY < -120 -> "MAYBE"; else -> null }; dragX = 0f; dragY = 0f; action?.let(::decide) }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
@@ -60,7 +60,7 @@ import kotlin.math.abs
                     IconButton({ skip(current, 30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
                 }
                 Text("${duration(reviewPosition)} / ${duration(reviewDuration)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } }
+        } } }
         Column(Modifier.fillMaxWidth().height(260.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
             if (state.maestAnalyzing) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("MAEST sta ascoltando 30 secondi…", style = MaterialTheme.typography.bodySmall) }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(max = 42.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -69,7 +69,7 @@ import kotlin.math.abs
                 state.maestPrediction?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.subgenre?.let { sub -> tags = tags.filterNot { it.startsWith("SUB:") }.toSet() + "SUB:$sub" } }, label = { Text("MAEST: ${ai.styles.take(3).joinToString(" · ") { "${it.label.substringAfter("---")} ${(it.score * 100).toInt()}%" }}", maxLines = 1) }, leadingIcon = { Icon(Icons.Default.Psychology, null) }) }
             }
             state.maestError?.let { Text("MAEST: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-            ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it })
+            key(current.id) { ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it }) }
         }
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             FilledTonalIconButton({ decide("REJECT") }, Modifier.size(58.dp), colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color(0xFF4A2028))) { Icon(Icons.Default.Close, "Reject") }
