@@ -25,7 +25,7 @@ class PerformanceMonitor(private val context: Context) {
         val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)?.div(10f) ?: 0f
         val thermalStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) (context.getSystemService(Context.POWER_SERVICE) as PowerManager).currentThermalStatus else 0
         val thermal = when { Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> "N/D"; thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE -> "Severo"; thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE -> "Caldo"; thermalStatus >= PowerManager.THERMAL_STATUS_LIGHT -> "Tiepido"; else -> "Normale" }
-        return PerformanceState(cpu, (Debug.getPss() / 1024).coerceAtLeast(0), battery, thermal)
+        return PerformanceState(cpu, (Debug.getPss() / 1024L).coerceAtLeast(0L).toInt(), battery, thermal)
     }
     private fun ticks(): Long = runCatching {
         val afterName = File("/proc/self/stat").readText().substringAfterLast(") ").split(' ')
