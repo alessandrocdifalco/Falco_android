@@ -22,12 +22,13 @@ import com.alessandro.falco.data.*
 import com.alessandro.falco.ui.UiState
 import kotlin.math.abs
 
-@Composable fun ReviewScreen(state: UiState, preview: (TrackEntity) -> Unit, toggle: (TrackEntity) -> Unit, seek: (Long) -> Unit, skip: (Long) -> Unit, review: (TrackEntity, String, String, Int, Set<String>) -> Unit, undo: () -> Unit) {
+@Composable fun ReviewScreen(state: UiState, preview: (TrackEntity) -> Unit, toggle: (TrackEntity) -> Unit, seek: (Long) -> Unit, skip: (Long) -> Unit, review: (TrackEntity, String, String, Int, Set<String>) -> Unit, undo: () -> Unit, loadWaveform: (TrackEntity) -> Unit) {
     val current = state.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
     var classify by remember(current?.id) { mutableStateOf(false) }
     var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
     var genre by remember(current?.id) { mutableStateOf(current?.genre ?: "") }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
     var tags by remember(current?.id) { mutableStateOf(current?.customTags?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()) }
+    LaunchedEffect(current.id) { loadWaveform(current) }
     fun decide(status: String) { current?.let { if (status == "KEEP" && !classify) classify = true else { review(it, status, genre, rating, tags); classify = false } } }
     Column(Modifier.fillMaxSize()) {
         Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
@@ -38,7 +39,7 @@ import kotlin.math.abs
             Box(Modifier.fillMaxWidth().weight(.7f), contentAlignment = Alignment.Center) { Icon(Icons.Default.GraphicEq, null, Modifier.size(110.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .7f)) }
             Text(current.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            Spacer(Modifier.height(14.dp)); WaveSeek(state.position, (state.playbackDuration.takeIf { it > 0 } ?: current.durationMs).coerceAtLeast(1), seek)
+            Spacer(Modifier.height(14.dp)); WaveSeek(state.waveform, state.waveformLoading, state.position, (state.playbackDuration.takeIf { it > 0 } ?: current.durationMs).coerceAtLeast(1), seek)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 IconButton({ skip(-30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
                 FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
@@ -55,10 +56,11 @@ import kotlin.math.abs
     }
 }
 
-@Composable private fun WaveSeek(position: Long, total: Long, seek: (Long) -> Unit) {
+@Composable private fun WaveSeek(peaks: List<Float>, loading: Boolean, position: Long, total: Long, seek: (Long) -> Unit) {
+    if (loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); return }
     Canvas(Modifier.fillMaxWidth().height(64.dp).pointerInput(total) { detectDragGestures(onDragStart = { seek((it.x / size.width * total).toLong()) }) { change, _ -> seek((change.position.x / size.width * total).toLong().coerceIn(0, total)) } }) {
-        val bars = 72; val played = position.toFloat() / total
-        repeat(bars) { i -> val x = i * size.width / bars; val wave = (.2f + abs(kotlin.math.sin(i * .47)).toFloat() * .75f) * size.height; drawLine(if (i.toFloat() / bars <= played) Color(0xFFF9A90A) else Color(0xFF4B5262), Offset(x, (size.height-wave)/2), Offset(x, (size.height+wave)/2), 3f) }
+        val data = peaks.ifEmpty { listOf(.15f) }; val played = position.toFloat() / total
+        data.forEachIndexed { i, value -> val x = i * size.width / data.size; val wave = value.coerceIn(.04f, 1f) * size.height; drawLine(if (i.toFloat() / data.size <= played) Color(0xFFF9A90A) else Color(0xFF4B5262), Offset(x, (size.height-wave)/2), Offset(x, (size.height+wave)/2), maxOf(2f, size.width/data.size*.55f)) }
     }
 }
 
@@ -68,5 +70,10 @@ import kotlin.math.abs
         Text("Classificazione", fontWeight = FontWeight.Bold); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { FalcoTaxonomy.genres.forEach { FilterChip(genre == it.id, { setGenre(it.id) }, { Text(it.label) }) } }
         Row { (1..5).forEach { n -> IconButton({ setRating(n) }) { Icon(if (n <= rating) Icons.Default.Star else Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.primary) } } }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), maxLines = 2) { FalcoTaxonomy.tags.forEach { tag -> FilterChip(tag.id in tags, { if (tag.id in tags) setTags(tags - tag.id) else if (tags.size < FalcoTaxonomy.maxTags) setTags(tags + tag.id) }, { Text(tag.label) }) } }
+        TaxonomyRow("Energia", FalcoTaxonomy.energy, tags, setTags, "E")
+        TaxonomyRow("Utilizzo", FalcoTaxonomy.usage, tags, setTags, "USE:")
+        TaxonomyRow("Voce", FalcoTaxonomy.voice, tags, setTags, "VOICE:")
     }
 }
+
+@Composable private fun TaxonomyRow(label: String, items: List<TaxonomyItem>, selected: Set<String>, update: (Set<String>) -> Unit, prefix: String) { Text(label, style = MaterialTheme.typography.labelMedium); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) { items.forEach { item -> val token = if (prefix == "E") item.id else prefix + item.id; FilterChip(token in selected, { update(selected.filterNot { if (prefix == "E") it.matches(Regex("E[1-5]")) else it.startsWith(prefix) }.toSet() + token) }, { Text(item.label) }) } } }
