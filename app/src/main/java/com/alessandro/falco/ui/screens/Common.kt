@@ -35,6 +35,7 @@ fun bytes(value: Long): String = when { value >= 1_073_741_824 -> "%.1f GB".form
     } }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable fun DetailSheet(track: TrackEntity, dismiss: (TrackEntity?) -> Unit, save: (TrackEntity) -> Unit, play: (TrackEntity) -> Unit) {
     var edited by remember(track) { mutableStateOf(track) }
     ModalBottomSheet(onDismissRequest = { dismiss(null) }) { Column(Modifier.fillMaxWidth().padding(20.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
