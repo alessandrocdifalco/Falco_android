@@ -1,5 +1,7 @@
 package com.alessandro.falco.ui
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -21,6 +23,11 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
     val state by vm.state.collectAsStateWithLifecycle()
     var destination by rememberSaveable { mutableStateOf(Destination.Dashboard) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { it?.let(vm::addFolder) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.startLibraryAnalysis() }
+    val startLibraryAnalysis = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else vm.startLibraryAnalysis()
+    }
     Scaffold(
         bottomBar = {
             NavigationBar(tonalElevation = 0.dp) { Destination.entries.forEach { d -> NavigationBarItem(selected = destination == d, onClick = { destination = d }, icon = { Icon(d.icon, null) }, label = { Text(d.label) }) } }
@@ -31,7 +38,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
                 Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
                 Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seekTrack, vm::skipTrack, vm::review, vm::undoReview, vm::loadWaveform)
                 Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
-                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, vm::startLibraryAnalysis, vm::cancelLibraryAnalysis)
+                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis)
             }
             state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
             state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }
