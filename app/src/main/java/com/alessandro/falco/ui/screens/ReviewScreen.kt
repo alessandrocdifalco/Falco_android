@@ -1,0 +1,72 @@
+package com.alessandro.falco.ui.screens
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.alessandro.falco.data.*
+import com.alessandro.falco.ui.UiState
+import kotlin.math.abs
+
+@Composable fun ReviewScreen(state: UiState, preview: (TrackEntity) -> Unit, toggle: (TrackEntity) -> Unit, seek: (Long) -> Unit, skip: (Long) -> Unit, review: (TrackEntity, String, String, Int, Set<String>) -> Unit, undo: () -> Unit) {
+    val current = state.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
+    var classify by remember(current?.id) { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
+    var genre by remember(current?.id) { mutableStateOf(current?.genre ?: "") }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
+    var tags by remember(current?.id) { mutableStateOf(current?.customTags?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()) }
+    fun decide(status: String) { current?.let { if (status == "KEEP" && !classify) classify = true else { review(it, status, genre, rating, tags); classify = false } } }
+    Column(Modifier.fillMaxSize()) {
+        Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
+        if (current == null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Revisione completata", style = MaterialTheme.typography.headlineSmall) }; return@Column }
+        Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth().graphicsLayer { translationX = dragX; translationY = dragY; rotationZ = dragX / 45f }.pointerInput(current.id) {
+            detectDragGestures(onDragEnd = { when { dragX > 180 -> decide("KEEP"); dragX < -180 -> decide("REJECT"); dragY < -160 -> decide("MAYBE") }; dragX = 0f; dragY = 0f }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
+        }) { Column(Modifier.fillMaxSize().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.fillMaxWidth().weight(.7f), contentAlignment = Alignment.Center) { Icon(Icons.Default.GraphicEq, null, Modifier.size(110.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .7f)) }
+            Text(current.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.height(14.dp)); WaveSeek(state.position, (state.playbackDuration.takeIf { it > 0 } ?: current.durationMs).coerceAtLeast(1), seek)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                IconButton({ skip(-30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
+                FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
+                IconButton({ skip(30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
+            }
+            Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)} • preview da 1:00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (classify) ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it })
+        } }
+        Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            FilledTonalIconButton({ decide("REJECT") }, Modifier.size(58.dp), colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color(0xFF4A2028))) { Icon(Icons.Default.Close, "Reject") }
+            FilledTonalIconButton({ decide("MAYBE") }, Modifier.size(58.dp)) { Icon(Icons.Default.Schedule, "Maybe") }
+            FilledIconButton({ decide("KEEP") }, Modifier.size(58.dp)) { Icon(Icons.Default.Check, "Keep") }
+        }
+    }
+}
+
+@Composable private fun WaveSeek(position: Long, total: Long, seek: (Long) -> Unit) {
+    Canvas(Modifier.fillMaxWidth().height(64.dp).pointerInput(total) { detectDragGestures(onDragStart = { seek((it.x / size.width * total).toLong()) }) { change, _ -> seek((change.position.x / size.width * total).toLong().coerceIn(0, total)) } }) {
+        val bars = 72; val played = position.toFloat() / total
+        repeat(bars) { i -> val x = i * size.width / bars; val wave = (.2f + abs(kotlin.math.sin(i * .47)).toFloat() * .75f) * size.height; drawLine(if (i.toFloat() / bars <= played) Color(0xFFF9A90A) else Color(0xFF4B5262), Offset(x, (size.height-wave)/2), Offset(x, (size.height+wave)/2), 3f) }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun ClassificationPanel(genre: String, setGenre: (String) -> Unit, rating: Int, setRating: (Int) -> Unit, tags: Set<String>, setTags: (Set<String>) -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text("Classificazione", fontWeight = FontWeight.Bold); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { FalcoTaxonomy.genres.forEach { FilterChip(genre == it.id, { setGenre(it.id) }, { Text(it.label) }) } }
+        Row { (1..5).forEach { n -> IconButton({ setRating(n) }) { Icon(if (n <= rating) Icons.Default.Star else Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.primary) } } }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), maxLines = 2) { FalcoTaxonomy.tags.forEach { tag -> FilterChip(tag.id in tags, { if (tag.id in tags) setTags(tags - tag.id) else if (tags.size < FalcoTaxonomy.maxTags) setTags(tags + tag.id) }, { Text(tag.label) }) } }
+    }
+}

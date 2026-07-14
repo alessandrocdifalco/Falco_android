@@ -24,7 +24,8 @@ data class UiState(
     val tracks: List<TrackEntity> = emptyList(), val query: String = "", val filters: Filters = Filters(), val sort: SortMode = SortMode.TITLE,
     val loading: Boolean = true, val scanning: Boolean = false, val scanProgress: ScanProgress? = null, val error: String? = null,
     val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0,
-    val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null
+    val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null,
+    val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -64,16 +65,23 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     fun select(v: TrackEntity?) = mutable.update { it.copy(selected = v) }
     fun save(v: TrackEntity) = viewModelScope.launch { repo.update(v); mutable.update { it.copy(selected = v) } }
     fun toggleFavorite(v: TrackEntity) = save(v.copy(favorite = !v.favorite))
-    fun play(v: TrackEntity) {
+    fun play(v: TrackEntity) = playFrom(v, null)
+    private fun playFrom(v: TrackEntity, startAtMs: Long?) {
         if (mutable.value.playing?.id == v.id) { if (player.isPlaying) player.pause() else player.play(); return }
-        player.setMediaItem(MediaItem.fromUri(v.uri)); player.prepare(); player.play(); mutable.update { it.copy(playing = v, position = 0) }
+        player.setMediaItem(MediaItem.fromUri(v.uri)); startAtMs?.let(player::seekTo); player.prepare(); player.play(); mutable.update { it.copy(playing = v, position = startAtMs ?: 0) }
     }
     fun seek(v: Long) = player.seekTo(v)
+    fun skip(delta: Long) = player.seekTo((player.currentPosition + delta).coerceIn(0, player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+    fun preview(v: TrackEntity) = playFrom(v, 60_000L)
+    fun review(v: TrackEntity, status: String, genre: String = v.genre, rating: Int = v.rating, tags: Set<String> = v.customTags.split(',').filter { it.isNotBlank() }.toSet()) = viewModelScope.launch {
+        mutable.update { it.copy(lastReviewed = v) }; repo.update(v.copy(workStatus = status, genre = genre, rating = rating, customTags = tags.joinToString(",")))
+    }
+    fun undoReview() = viewModelScope.launch { mutable.value.lastReviewed?.let { repo.update(it); mutable.update { s -> s.copy(lastReviewed = null) } } }
     fun saveWebDav(config: WebDavConfig) { repo.saveWebDav(config); player.release(); player = createPlayer(getApplication(), config); attachPlayerListener(); mutable.update { it.copy(webDavConfig = config, webDavMessage = "Connessione salvata") } }
     fun testWebDav(config: WebDavConfig) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; val result = repo.testWebDav(config); mutable.update { it.copy(webDavBusy = false, webDavMessage = if (result.isSuccess) "Connessione riuscita" else result.exceptionOrNull()?.message ?: "Connessione fallita") } }
     fun browseWebDav(path: String) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; runCatching { repo.browseWebDav(path) }.onSuccess { items -> mutable.update { it.copy(webDavItems = items, webDavPath = path, webDavBusy = false) } }.onFailure { error -> mutable.update { it.copy(webDavBusy = false, webDavMessage = "Errore WebDAV: ${error.message}") } } }
     fun scanWebDav(path: String, recursive: Boolean) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = "Analisi WebDAV…") }; runCatching { repo.scanWebDav(path, recursive) { n, p -> mutable.update { it.copy(webDavMessage = "$n cartelle analizzate • $p") } } }.onSuccess { mutable.update { it.copy(webDavBusy = false, webDavMessage = "Scansione completata") } }.onFailure { e -> mutable.update { it.copy(webDavBusy = false, webDavMessage = "Errore: ${e.message}") } } }
-    private fun attachPlayerListener() { player.addListener(object : Player.Listener { override fun onIsPlayingChanged(v: Boolean) { mutable.update { it.copy(isPlaying = v) } } }) }
+    private fun attachPlayerListener() { player.addListener(object : Player.Listener { override fun onIsPlayingChanged(v: Boolean) { mutable.update { it.copy(isPlaying = v) } }; override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) mutable.update { it.copy(playbackDuration = player.duration.coerceAtLeast(0)) } } }) }
     fun playWebDav(item: WebDavItem) = play(WebDavClient(mutable.value.webDavConfig).toTrack(item))
     private fun createPlayer(app: Application, config: WebDavConfig): ExoPlayer {
         val factory = OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap())

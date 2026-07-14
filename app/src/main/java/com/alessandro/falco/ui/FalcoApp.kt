@@ -29,7 +29,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (destination) {
                 Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
-                Destination.Review -> LibraryScreen(state, vm::query, vm::filters, vm::sort, vm::select, vm::play, vm::toggleFavorite)
+                Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seek, vm::skip, vm::review, vm::undoReview)
                 Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
                 Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder)
             }
