@@ -16,6 +16,7 @@ import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.data.TrackEntity
@@ -85,11 +86,11 @@ class FalcoMediaService : MediaLibraryService() {
 
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
             val status = when (customCommand.customAction) { ACTION_KEEP -> "KEEP"; ACTION_MAYBE -> "MAYBE"; ACTION_REJECT -> "REJECT"; else -> null }
-                ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             val currentId = player.currentMediaItem?.mediaId?.removePrefix("track:")?.toLongOrNull()
-                ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
             val current = tracks.firstOrNull { it.id == currentId }
-                ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
             scope.launch { dao.update(current.copy(workStatus = status)) }
             val next = tracks.firstOrNull { it.id != currentId && (it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE") }
             if (next != null) { player.setMediaItem(song(next)); player.prepare(); player.play() } else player.pause()
