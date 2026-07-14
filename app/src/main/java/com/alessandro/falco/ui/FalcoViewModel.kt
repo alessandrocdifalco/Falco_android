@@ -37,7 +37,7 @@ data class UiState(
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
     val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null,
     val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = "",
-    val analysisParallelism: Int = 1, val effectiveParallelism: Int = 1, val analysisEtaMs: Long = 0,
+    val analysisParallelism: Int = 1, val effectiveParallelism: Int = 1, val analysisEtaMs: Long = 0, val automaticPerformanceScaling: Boolean = true,
     val coverArt: ByteArray? = null, val coverLoading: Boolean = false, val backupMessage: String? = null,
     val aiLearning: AiLearningStats = AiLearningStats(), val performance: PerformanceState = PerformanceState()
 ) {
@@ -65,10 +65,11 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val performanceStore = AnalysisPerformanceStore(app)
     private val performanceMonitor = PerformanceMonitor(app)
     private var coverRequestId: Long = -1
+    private val httpClient = OkHttpClient.Builder().retryOnConnectionFailure(true).build()
     private var player = createPlayer(app, repo.webDavConfig())
     private var previewPlayer = createPlayer(app, repo.webDavConfig())
     private var preloadedTrackId = -1L
-    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state(), aiLearning = localAi.stats(), analysisParallelism = performanceStore.selected(), effectiveParallelism = performanceStore.effective()))
+    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state(), aiLearning = localAi.stats(), analysisParallelism = performanceStore.selected(), effectiveParallelism = performanceStore.effective(), automaticPerformanceScaling = performanceStore.automaticScaling()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
     init {
         viewModelScope.launch { repo.tracks.collect { tracks ->
@@ -182,6 +183,16 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         performanceStore.save(value)
         mutable.update { state -> state.copy(analysisParallelism = performanceStore.selected(), effectiveParallelism = if (state.libraryAnalyzing) state.effectiveParallelism else performanceStore.effective()) }
     }
+    fun setAutomaticPerformanceScaling(enabled: Boolean) {
+        performanceStore.saveAutomaticScaling(enabled)
+        mutable.update { it.copy(automaticPerformanceScaling = enabled, effectiveParallelism = if (it.libraryAnalyzing) it.effectiveParallelism else performanceStore.effective()) }
+    }
+    fun resetDatabase() = viewModelScope.launch {
+        workManager.cancelUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME)
+        player.stop(); previewPlayer.stop(); preloadedTrackId = -1L
+        repo.resetDatabase()
+        mutable.update { it.copy(tracks = emptyList(), selected = null, playing = null, isPlaying = false, position = 0, waveform = emptyList(), maestPrediction = null, aiSuggestion = null, lastReviewed = null, backupMessage = "Database locale azzerato") }
+    }
     fun exportBackup(uri: Uri) = viewModelScope.launch {
         runCatching { backupManager.write(uri, mutable.value.tracks) }
             .onSuccess { count -> mutable.update { it.copy(backupMessage = "Backup completato: $count brani") } }
@@ -228,8 +239,8 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private fun attachPlayerListener() { player.addListener(object : Player.Listener { override fun onIsPlayingChanged(v: Boolean) { mutable.update { it.copy(isPlaying = v) } }; override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) mutable.update { it.copy(playbackDuration = player.duration.coerceAtLeast(0)) } } }) }
     fun playWebDav(item: WebDavItem) = play(WebDavClient(mutable.value.webDavConfig).toTrack(item))
     private fun createPlayer(app: Application, config: WebDavConfig): ExoPlayer {
-        val factory = OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap())
-        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(1_500, 15_000, 400, 750).build()
+        val factory = OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap())
+        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 45_000, 350, 700).setPrioritizeTimeOverSizeThresholds(true).build()
         return ExoPlayer.Builder(app).setMediaSourceFactory(DefaultMediaSourceFactory(factory)).setLoadControl(loadControl).build()
     }
     private fun fail(t: Throwable) = mutable.update { it.copy(error = t.message ?: "Errore imprevisto", scanning = false, loading = false) }

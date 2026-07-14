@@ -15,7 +15,7 @@ import com.alessandro.falco.ui.UiState
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun PerformanceBar(state: UiState, cancelAnalysis: () -> Unit) {
     var open by remember { mutableStateOf(false) }
-    Surface(Modifier.fillMaxWidth().height(34.dp).clickable { open = true }, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+    Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) { Surface(Modifier.fillMaxWidth().height(34.dp).clickable { open = true }, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.Memory, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
             Text("CPU ${state.performance.cpu}%", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
@@ -24,7 +24,7 @@ import com.alessandro.falco.ui.UiState
             Spacer(Modifier.weight(1f))
             Text(if (state.libraryAnalyzing) "MAEST ${state.effectiveParallelism}×" else state.performance.thermal, style = MaterialTheme.typography.labelMedium, color = if (state.performance.thermal == "Severo") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
         }
-    }
+    } }
     if (open) ModalBottomSheet(onDismissRequest = { open = false }) { Column(Modifier.fillMaxWidth().padding(20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Task Manager FALCO", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
         TaskRow("CPU processo", "${state.performance.cpu}% del telefono")
@@ -33,6 +33,7 @@ import com.alessandro.falco.ui.UiState
         TaskRow("Stato termico", state.performance.thermal)
         TaskRow("Modalità richiesta", "Turbo ${state.analysisParallelism}×")
         TaskRow("Parallelismo effettivo", "${state.effectiveParallelism}×")
+        TaskRow("Riduzione automatica", if (state.automaticPerformanceScaling) "Attiva" else "Disattivata")
         if (state.libraryAnalyzing) {
             LinearProgressIndicator(progress = { state.libraryAnalysisDone.toFloat() / state.libraryAnalysisTotal.coerceAtLeast(1) }, Modifier.fillMaxWidth())
             Text("${state.libraryAnalysisDone}/${state.libraryAnalysisTotal} • ${state.libraryAnalysisTrack}")

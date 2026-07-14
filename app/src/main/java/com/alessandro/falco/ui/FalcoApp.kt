@@ -42,7 +42,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
                 Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seekTrack, vm::skipTrack, vm::review, vm::undoReview, vm::loadWaveform)
                 Destination.Ai -> AiLearningScreen(state)
                 Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
-                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis, vm::setAnalysisParallelism, { backupWriter.launch("falco-backup.json") }, { backupReader.launch(arrayOf("application/json")) })
+                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis, vm::setAnalysisParallelism, vm::setAutomaticPerformanceScaling, vm::resetDatabase, { backupWriter.launch("falco-backup.json") }, { backupReader.launch(arrayOf("application/json")) })
             }
             state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
             state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }

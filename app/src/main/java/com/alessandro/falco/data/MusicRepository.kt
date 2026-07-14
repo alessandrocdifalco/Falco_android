@@ -6,7 +6,8 @@ import kotlinx.coroutines.flow.Flow
 import com.alessandro.falco.webdav.*
 
 class MusicRepository(context: Context) {
-    private val dao = FalcoDatabase.get(context).tracks()
+    private val database = FalcoDatabase.get(context)
+    private val dao = database.tracks()
     private val folders = FolderStore(context)
     private val scanner = AudioScanner(context)
     private val webDavStore = WebDavStore(context)
@@ -32,6 +33,7 @@ class MusicRepository(context: Context) {
     suspend fun removeFolder(uri: String) { folders.remove(uri); dao.deleteFolder(uri) }
     suspend fun update(track: TrackEntity) = dao.update(track)
     suspend fun restoreBackup(tracks: List<TrackEntity>) = dao.updateAll(tracks)
+    suspend fun resetDatabase() = database.clearAllTables()
     fun webDavConfig() = webDavStore.load()
     fun saveWebDav(config: WebDavConfig) = webDavStore.save(config)
     suspend fun testWebDav(config: WebDavConfig) = WebDavClient(config).test()
