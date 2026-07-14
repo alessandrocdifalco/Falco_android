@@ -27,7 +27,8 @@ data class UiState(
     val loading: Boolean = true, val scanning: Boolean = false, val scanProgress: ScanProgress? = null, val error: String? = null,
     val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0,
     val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null,
-    val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null
+    val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
+    val maest: MaestModelState = MaestModelState()
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -46,8 +47,9 @@ data class UiState(
 class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = MusicRepository(app)
     private val localAi = LocalAiEngine(app)
+    private val maestStore = MaestModelStore(app)
     private var player = createPlayer(app, repo.webDavConfig())
-    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig()))
+    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
     init {
         viewModelScope.launch { repo.tracks.collect { mutable.update { s -> s.copy(tracks = it, loading = false, selected = s.selected?.let { old -> it.find { n -> n.id == old.id } }) } } }
@@ -82,6 +84,14 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         localAi.learn(v, mutable.value.waveform, genre, subgenre, energy, rating); mutable.update { it.copy(lastReviewed = v) }; repo.update(v.copy(workStatus = status, genre = genre, rating = rating, customTags = tags.joinToString(",")))
     }
     fun undoReview() = viewModelScope.launch { mutable.value.lastReviewed?.let { repo.update(it); mutable.update { s -> s.copy(lastReviewed = null) } } }
+    fun downloadMaest() = viewModelScope.launch {
+        if (mutable.value.maest.downloading) return@launch
+        mutable.update { it.copy(maest = MaestModelState(downloading = true, message = "Avvio download MAEST…")) }
+        maestStore.download { progress -> mutable.update { it.copy(maest = progress) } }
+            .onSuccess { ready -> mutable.update { it.copy(maest = ready) } }
+            .onFailure { error -> mutable.update { it.copy(maest = MaestModelState(message = error.message ?: "Download MAEST fallito")) } }
+    }
+    fun removeMaest() { maestStore.remove(); mutable.update { it.copy(maest = maestStore.state()) } }
     fun loadWaveform(track: TrackEntity) = viewModelScope.launch { mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null) }; val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }; val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList()); mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) } }
     fun saveWebDav(config: WebDavConfig) { repo.saveWebDav(config); player.release(); player = createPlayer(getApplication(), config); attachPlayerListener(); mutable.update { it.copy(webDavConfig = config, webDavMessage = "Connessione salvata") } }
     fun testWebDav(config: WebDavConfig) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; val result = repo.testWebDav(config); mutable.update { it.copy(webDavBusy = false, webDavMessage = if (result.isSuccess) "Connessione riuscita" else result.exceptionOrNull()?.message ?: "Connessione fallita") } }
