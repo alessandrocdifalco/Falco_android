@@ -28,7 +28,7 @@ import kotlin.math.abs
     var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
     var genre by remember(current?.id) { mutableStateOf(current?.genre ?: "") }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
     var tags by remember(current?.id) { mutableStateOf(current?.customTags?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()) }
-    LaunchedEffect(current.id) { loadWaveform(current) }
+    LaunchedEffect(current?.id) { current?.let(loadWaveform) }
     fun decide(status: String) { current?.let { if (status == "KEEP" && !classify) classify = true else { review(it, status, genre, rating, tags); classify = false } } }
     Column(Modifier.fillMaxSize()) {
         Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
