@@ -36,7 +36,8 @@ data class UiState(
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
     val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null,
     val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = "",
-    val coverArt: ByteArray? = null, val coverLoading: Boolean = false, val backupMessage: String? = null
+    val coverArt: ByteArray? = null, val coverLoading: Boolean = false, val backupMessage: String? = null,
+    val aiLearning: AiLearningStats = AiLearningStats()
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -61,7 +62,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val backupManager = BackupManager(app)
     private var coverRequestId: Long = -1
     private var player = createPlayer(app, repo.webDavConfig())
-    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state()))
+    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state(), aiLearning = localAi.stats()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
     init {
         viewModelScope.launch { repo.tracks.collect { mutable.update { s -> s.copy(tracks = it, loading = false, selected = s.selected?.let { old -> it.find { n -> n.id == old.id } }) } } }
@@ -110,10 +111,21 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         seekTrack(track, (position + delta).coerceIn(0, duration.coerceAtLeast(0)))
     }
     fun preview(v: TrackEntity) = playFrom(v, 60_000L)
-    fun review(v: TrackEntity, status: String, genre: String = v.genre, rating: Int = v.rating, tags: Set<String> = v.customTags.split(',').filter { it.isNotBlank() }.toSet()) = viewModelScope.launch {
+    fun review(v: TrackEntity, status: String, genre: String = v.genre, rating: Int = v.rating, tags: Set<String> = v.customTags.split(',').filter { it.isNotBlank() }.toSet()) {
         val energy = tags.firstOrNull { it.matches(Regex("E[1-5]")) }?.drop(1)?.toIntOrNull() ?: mutable.value.aiSuggestion?.energy ?: 3
         val subgenre = tags.firstOrNull { it.startsWith("SUB:") }?.removePrefix("SUB:") ?: genre
-        localAi.learn(v, mutable.value.waveform, genre, subgenre, energy, rating); mutable.update { it.copy(lastReviewed = v) }; repo.update(v.copy(workStatus = status, genre = genre, rating = rating, customTags = tags.joinToString(",")))
+        val prediction = mutable.value.aiSuggestion
+        val waveform = mutable.value.waveform
+        val updatedTrack = v.copy(workStatus = status, genre = genre, rating = rating, customTags = tags.joinToString(","))
+        val wasPlaying = mutable.value.playing?.id == v.id
+        mutable.update { state -> state.copy(tracks = state.tracks.map { if (it.id == v.id) updatedTrack else it }, lastReviewed = v) }
+        val next = mutable.value.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
+        if (wasPlaying) { if (next != null) playFrom(next, 60_000L.coerceAtMost(next.durationMs.coerceAtLeast(60_000L))) else player.pause() }
+        viewModelScope.launch {
+            localAi.learn(v, waveform, genre, subgenre, energy, rating, status, prediction)
+            mutable.update { it.copy(aiLearning = localAi.stats()) }
+            repo.update(updatedTrack)
+        }
     }
     fun undoReview() = viewModelScope.launch { mutable.value.lastReviewed?.let { repo.update(it); mutable.update { s -> s.copy(lastReviewed = null) } } }
     fun downloadMaest() = viewModelScope.launch {

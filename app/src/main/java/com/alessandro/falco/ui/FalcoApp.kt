@@ -17,7 +17,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alessandro.falco.ui.screens.*
 
-private enum class Destination(val label: String, val icon: ImageVector) { Dashboard("Dashboard", Icons.Default.Dashboard), Review("Revisione", Icons.Default.LibraryMusic), WebDav("WebDAV", Icons.Default.Folder), More("Altro", Icons.Default.Menu) }
+private enum class Destination(val label: String, val icon: ImageVector) { Dashboard("Dashboard", Icons.Default.Dashboard), Review("Revisione", Icons.Default.LibraryMusic), Ai("AI", Icons.Default.Psychology), WebDav("WebDAV", Icons.Default.Folder), More("Altro", Icons.Default.Menu) }
 
 @Composable fun FalcoApp(vm: FalcoViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -39,6 +39,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
             when (destination) {
                 Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
                 Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seekTrack, vm::skipTrack, vm::review, vm::undoReview, vm::loadWaveform)
+                Destination.Ai -> AiLearningScreen(state)
                 Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
                 Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis, { backupWriter.launch("falco-backup.json") }, { backupReader.launch(arrayOf("application/json")) })
             }
