@@ -26,7 +26,7 @@ import kotlin.math.abs
     val current = state.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
     var classify by remember(current?.id) { mutableStateOf(false) }
     var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
-    var genre by remember(current?.id) { mutableStateOf(current?.genre ?: "") }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
+    var genre by remember(current?.id) { mutableStateOf(current?.genre?.takeIf { value -> FalcoTaxonomy.genres.any { it.id == value } }.orEmpty()) }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
     var tags by remember(current?.id) { mutableStateOf(current?.customTags?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()) }
     LaunchedEffect(current?.id) { current?.let(loadWaveform) }
     fun decide(status: String) { current?.let { if (status == "KEEP" && !classify) classify = true else { review(it, status, genre, rating, tags); classify = false } } }
@@ -36,16 +36,18 @@ import kotlin.math.abs
         Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth().graphicsLayer { translationX = dragX; translationY = dragY; rotationZ = dragX / 45f }.pointerInput(current.id) {
             detectDragGestures(onDragEnd = { when { dragX > 180 -> decide("KEEP"); dragX < -180 -> decide("REJECT"); dragY < -160 -> decide("MAYBE") }; dragX = 0f; dragY = 0f }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
         }) { Column(Modifier.fillMaxSize().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.fillMaxWidth().weight(.7f), contentAlignment = Alignment.Center) { Icon(Icons.Default.GraphicEq, null, Modifier.size(110.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .7f)) }
             Text(current.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            Spacer(Modifier.height(14.dp)); WaveSeek(state.waveform, state.waveformLoading, state.position, (state.playbackDuration.takeIf { it > 0 } ?: current.durationMs).coerceAtLeast(1), seek)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton({ skip(-30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
-                FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
-                IconButton({ skip(30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
+            if (!classify) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Icon(Icons.Default.GraphicEq, null, Modifier.size(110.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .7f)) }
+                Spacer(Modifier.height(14.dp)); WaveSeek(state.waveform, state.waveformLoading, state.position, (state.playbackDuration.takeIf { it > 0 } ?: current.durationMs).coerceAtLeast(1), seek)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton({ skip(-30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
+                    FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
+                    IconButton({ skip(30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
+                }
+                Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)} • preview da 1:00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)} • preview da 1:00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             state.aiSuggestion?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.rating?.let { rating = it }; tags = tags.filterNot { it.matches(Regex("E[1-5]")) || it.startsWith("SUB:") }.toSet() + "E${ai.energy}" + (ai.subgenre?.let { setOf("SUB:$it") } ?: emptySet()) }, label = { Text("AI: ${ai.genre ?: "impara"}${ai.subgenre?.let { " › $it" } ?: ""} • E${ai.energy}${ai.rating?.let { " • R$it" } ?: ""} • ${ai.confidence}%", maxLines = 1) }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) }) }
             if (classify) ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it })
         } }
@@ -70,7 +72,7 @@ import kotlin.math.abs
     Column(Modifier.fillMaxWidth()) {
         Text("Genere", fontWeight = FontWeight.Bold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy((-6).dp), maxItemsInEachRow = 3) { FalcoTaxonomy.genres.forEach { item -> FilterChip(genre == item.id, { setGenre(item.id); setTags(tags.filterNot { it.startsWith("SUB:") }.toSet() + "SUB:${item.id}") }, { Text(item.label, style = MaterialTheme.typography.labelSmall) }) } }
-        Text("Sottogenere", fontWeight = FontWeight.Bold)
+        Text(if (genre.isBlank()) "Sottogenere · scegli prima il genere" else "Sottogenere", fontWeight = FontWeight.Bold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy((-6).dp), maxItemsInEachRow = 5) { FalcoTaxonomy.subgenres[genre].orEmpty().forEach { item -> val token = "SUB:${item.id}"; FilterChip(token in tags, { setTags(tags.filterNot { it.startsWith("SUB:") }.toSet() + token) }, { Text(item.label, style = MaterialTheme.typography.labelSmall, maxLines = 1) }) } }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Energia", Modifier.width(62.dp), fontWeight = FontWeight.Bold); FalcoTaxonomy.energy.forEach { item -> val token = item.id; FilterChip(token in tags, { setTags(tags.filterNot { it.matches(Regex("E[1-5]")) }.toSet() + token) }, { Text(token) }, modifier = Modifier.weight(1f)) } }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Rating", Modifier.width(62.dp), fontWeight = FontWeight.Bold); (1..5).forEach { n -> IconButton({ setRating(n) }, Modifier.weight(1f)) { Icon(if (n <= rating) Icons.Default.Star else Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.primary) } } }
