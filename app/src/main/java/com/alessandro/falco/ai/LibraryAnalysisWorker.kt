@@ -22,8 +22,10 @@ class LibraryAnalysisWorker(appContext: Context, params: WorkerParameters) : Cor
         tracks.forEachIndexed { index, track ->
             if (isStopped) return Result.retry()
             setProgress(Data.Builder().putInt(KEY_DONE, index).putInt(KEY_TOTAL, initialPending).putString(KEY_TRACK, track.title).build())
-            val waveform = runCatching { WaveformExtractor(applicationContext).extract(track, authorization) }.getOrDefault(emptyList())
-            runCatching { MaestEngine(applicationContext).analyze(track, authorization) }
+            val waveform = if (track.waveformCache.isBlank()) runCatching { WaveformExtractor(applicationContext).extract(track, authorization) }.getOrDefault(emptyList()) else AiCache.decodeWaveform(track.waveformCache)
+            if (track.maestCache.isNotBlank() && track.aiSourceModifiedAt == track.modifiedAt) {
+                dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), track.maestCache, track.aiAnalyzedAt, track.aiAnalysisError)
+            } else runCatching { MaestEngine(applicationContext).analyze(track, authorization) }
                 .onSuccess { prediction -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), AiCache.encodePrediction(prediction), System.currentTimeMillis(), "") }
                 .onFailure { error -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), "", System.currentTimeMillis(), error.message ?: "Analisi fallita") }
         }

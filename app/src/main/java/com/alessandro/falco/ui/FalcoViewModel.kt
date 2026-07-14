@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.alessandro.falco.data.*
 import com.alessandro.falco.webdav.*
 import com.alessandro.falco.audio.WaveformExtractor
+import com.alessandro.falco.audio.CoverArtExtractor
 import com.alessandro.falco.ai.*
 import okhttp3.OkHttpClient
 import kotlinx.coroutines.delay
@@ -34,7 +35,8 @@ data class UiState(
     val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null,
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
     val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null,
-    val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = ""
+    val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = "",
+    val coverArt: ByteArray? = null, val coverLoading: Boolean = false
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -56,6 +58,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val maestStore = MaestModelStore(app)
     private val maestEngine = MaestEngine(app)
     private val workManager = WorkManager.getInstance(app)
+    private var coverRequestId: Long = -1
     private var player = createPlayer(app, repo.webDavConfig())
     private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
@@ -119,17 +122,25 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun cancelLibraryAnalysis() = workManager.cancelUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME)
     fun loadWaveform(track: TrackEntity) = viewModelScope.launch {
-        mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestError = null) }
+        coverRequestId = track.id
+        mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestError = null, coverArt = null, coverLoading = true) }
+        val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }
+        launch {
+            val art = runCatching { CoverArtExtractor(getApplication()).extract(track, auth) }.getOrNull()
+            if (coverRequestId == track.id) mutable.update { it.copy(coverArt = art, coverLoading = false) }
+        }
         val cachedWaveform = AiCache.decodeWaveform(track.waveformCache)
         val cachedPrediction = AiCache.decodePrediction(track.maestCache)
-        if (cachedWaveform.isNotEmpty() || cachedPrediction != null) {
+        if (cachedWaveform.isNotEmpty()) {
             mutable.update { it.copy(waveform = cachedWaveform, waveformLoading = false, aiSuggestion = localAi.suggest(track, cachedWaveform), maestPrediction = cachedPrediction, maestError = track.aiAnalysisError.takeIf(String::isNotBlank)) }
             return@launch
         }
-        val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }
         val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList())
         mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) }
-        if (maestStore.state().installed) {
+        if (cachedPrediction != null) {
+            repo.update(track.copy(waveformCache = AiCache.encodeWaveform(peaks)))
+            mutable.update { it.copy(maestPrediction = cachedPrediction) }
+        } else if (maestStore.state().installed) {
             mutable.update { it.copy(maestAnalyzing = true) }
             runCatching { maestEngine.analyze(track, auth) }
                 .onSuccess { prediction ->
