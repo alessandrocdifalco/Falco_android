@@ -31,6 +31,7 @@ class MusicRepository(context: Context) {
 
     suspend fun removeFolder(uri: String) { folders.remove(uri); dao.deleteFolder(uri) }
     suspend fun update(track: TrackEntity) = dao.update(track)
+    suspend fun restoreBackup(tracks: List<TrackEntity>) = dao.updateAll(tracks)
     fun webDavConfig() = webDavStore.load()
     fun saveWebDav(config: WebDavConfig) = webDavStore.save(config)
     suspend fun testWebDav(config: WebDavConfig) = WebDavClient(config).test()

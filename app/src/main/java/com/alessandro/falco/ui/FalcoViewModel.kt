@@ -36,7 +36,7 @@ data class UiState(
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
     val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null,
     val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = "",
-    val coverArt: ByteArray? = null, val coverLoading: Boolean = false
+    val coverArt: ByteArray? = null, val coverLoading: Boolean = false, val backupMessage: String? = null
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -58,6 +58,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val maestStore = MaestModelStore(app)
     private val maestEngine = MaestEngine(app)
     private val workManager = WorkManager.getInstance(app)
+    private val backupManager = BackupManager(app)
     private var coverRequestId: Long = -1
     private var player = createPlayer(app, repo.webDavConfig())
     private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state()))
@@ -130,6 +131,16 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         workManager.enqueueUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME, ExistingWorkPolicy.REPLACE, request)
     }
     fun cancelLibraryAnalysis() = workManager.cancelUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME)
+    fun exportBackup(uri: Uri) = viewModelScope.launch {
+        runCatching { backupManager.write(uri, mutable.value.tracks) }
+            .onSuccess { count -> mutable.update { it.copy(backupMessage = "Backup completato: $count brani") } }
+            .onFailure { error -> mutable.update { it.copy(backupMessage = "Backup fallito: ${error.message}") } }
+    }
+    fun importBackup(uri: Uri) = viewModelScope.launch {
+        runCatching { backupManager.restore(uri, mutable.value.tracks) }
+            .onSuccess { restored -> repo.restoreBackup(restored); mutable.update { it.copy(backupMessage = "Ripristinati ${restored.size} brani") } }
+            .onFailure { error -> mutable.update { it.copy(backupMessage = "Ripristino fallito: ${error.message}") } }
+    }
     fun loadWaveform(track: TrackEntity) = viewModelScope.launch {
         coverRequestId = track.id
         mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestError = null, coverArt = null, coverLoading = true) }

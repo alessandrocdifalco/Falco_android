@@ -24,6 +24,8 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
     var destination by rememberSaveable { mutableStateOf(Destination.Dashboard) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { it?.let(vm::addFolder) }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.startLibraryAnalysis() }
+    val backupWriter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { it?.let(vm::exportBackup) }
+    val backupReader = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importBackup) }
     val startLibraryAnalysis = {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         else vm.startLibraryAnalysis()
@@ -38,7 +40,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
                 Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
                 Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seekTrack, vm::skipTrack, vm::review, vm::undoReview, vm::loadWaveform)
                 Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
-                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis)
+                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis, { backupWriter.launch("falco-backup.json") }, { backupReader.launch(arrayOf("application/json")) })
             }
             state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
             state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }

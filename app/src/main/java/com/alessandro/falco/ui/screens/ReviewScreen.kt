@@ -51,7 +51,8 @@ import kotlin.math.abs
             }
                 val currentIsPlaying = state.playing?.id == current.id
                 val reviewPosition = if (currentIsPlaying) state.position else 0L
-                val reviewDuration = (if (currentIsPlaying) state.playbackDuration.takeIf { it > 0 } else null ?: current.durationMs).coerceAtLeast(1)
+                val activeDuration = if (currentIsPlaying) state.playbackDuration.takeIf { it > 0 } else null
+                val reviewDuration = (activeDuration ?: current.durationMs).coerceAtLeast(1)
                 WaveSeek(state.waveform, state.waveformLoading, reviewPosition, reviewDuration) { seek(current, it) }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     IconButton({ skip(current, -30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
