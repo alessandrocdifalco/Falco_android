@@ -46,7 +46,7 @@ import kotlin.math.abs
                 IconButton({ skip(30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
             }
             Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)} • preview da 1:00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            state.aiSuggestion?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.rating?.let { rating = it }; tags = tags.filterNot { it.matches(Regex("E[1-5]")) }.toSet() + "E${ai.energy}" }, label = { Text("AI locale: ${ai.genre ?: "in apprendimento"} • E${ai.energy}${ai.rating?.let { " • R$it" } ?: ""} • ${ai.confidence}%") }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) }) }
+            state.aiSuggestion?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.rating?.let { rating = it }; tags = tags.filterNot { it.matches(Regex("E[1-5]")) || it.startsWith("SUB:") }.toSet() + "E${ai.energy}" + (ai.subgenre?.let { setOf("SUB:$it") } ?: emptySet()) }, label = { Text("AI: ${ai.genre ?: "impara"}${ai.subgenre?.let { " › $it" } ?: ""} • E${ai.energy}${ai.rating?.let { " • R$it" } ?: ""} • ${ai.confidence}%", maxLines = 1) }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) }) }
             if (classify) ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it })
         } }
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -68,12 +68,12 @@ import kotlin.math.abs
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun ClassificationPanel(genre: String, setGenre: (String) -> Unit, rating: Int, setRating: (Int) -> Unit, tags: Set<String>, setTags: (Set<String>) -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Text("Classificazione", fontWeight = FontWeight.Bold); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { FalcoTaxonomy.genres.forEach { FilterChip(genre == it.id, { setGenre(it.id) }, { Text(it.label) }) } }
-        Row { (1..5).forEach { n -> IconButton({ setRating(n) }) { Icon(if (n <= rating) Icons.Default.Star else Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.primary) } } }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), maxLines = 2) { FalcoTaxonomy.tags.forEach { tag -> FilterChip(tag.id in tags, { if (tag.id in tags) setTags(tags - tag.id) else if (tags.size < FalcoTaxonomy.maxTags) setTags(tags + tag.id) }, { Text(tag.label) }) } }
-        TaxonomyRow("Energia", FalcoTaxonomy.energy, tags, setTags, "E")
-        TaxonomyRow("Utilizzo", FalcoTaxonomy.usage, tags, setTags, "USE:")
-        TaxonomyRow("Voce", FalcoTaxonomy.voice, tags, setTags, "VOICE:")
+        Text("Genere", fontWeight = FontWeight.Bold)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy((-6).dp), maxItemsInEachRow = 3) { FalcoTaxonomy.genres.forEach { item -> FilterChip(genre == item.id, { setGenre(item.id); setTags(tags.filterNot { it.startsWith("SUB:") }.toSet() + "SUB:${item.id}") }, { Text(item.label, style = MaterialTheme.typography.labelSmall) }) } }
+        Text("Sottogenere", fontWeight = FontWeight.Bold)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy((-6).dp), maxItemsInEachRow = 5) { FalcoTaxonomy.subgenres[genre].orEmpty().forEach { item -> val token = "SUB:${item.id}"; FilterChip(token in tags, { setTags(tags.filterNot { it.startsWith("SUB:") }.toSet() + token) }, { Text(item.label, style = MaterialTheme.typography.labelSmall, maxLines = 1) }) } }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Energia", Modifier.width(62.dp), fontWeight = FontWeight.Bold); FalcoTaxonomy.energy.forEach { item -> val token = item.id; FilterChip(token in tags, { setTags(tags.filterNot { it.matches(Regex("E[1-5]")) }.toSet() + token) }, { Text(token) }, modifier = Modifier.weight(1f)) } }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Rating", Modifier.width(62.dp), fontWeight = FontWeight.Bold); (1..5).forEach { n -> IconButton({ setRating(n) }, Modifier.weight(1f)) { Icon(if (n <= rating) Icons.Default.Star else Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.primary) } } }
     }
 }
 
