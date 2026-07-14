@@ -19,6 +19,12 @@ import com.alessandro.falco.audio.WaveformExtractor
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.webdav.WebDavClient
 import com.alessandro.falco.webdav.WebDavStore
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.atomic.AtomicInteger
 
 class LibraryAnalysisWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
@@ -30,18 +36,32 @@ class LibraryAnalysisWorker(appContext: Context, params: WorkerParameters) : Cor
         val tracks = dao.pendingAnalysis(BATCH_SIZE)
         val initialPending = dao.pendingAnalysisCount()
         if (tracks.isEmpty()) return Result.success()
+        val selectedParallelism = AnalysisPerformanceStore(applicationContext).selected()
+        val parallelism = AnalysisPerformanceStore(applicationContext).effective()
+        MaestEngine.configureParallelism(parallelism)
+        val startedAt = System.currentTimeMillis()
+        val completed = AtomicInteger(0)
         setForeground(notification(0, initialPending, "Preparazione analisi…"))
-        tracks.forEachIndexed { index, track ->
-            if (isStopped) return Result.retry()
-            setProgress(Data.Builder().putInt(KEY_DONE, index).putInt(KEY_TOTAL, initialPending).putString(KEY_TRACK, track.title).build())
-            setForeground(notification(index, initialPending, track.title))
-            val waveform = if (track.waveformCache.isBlank()) runCatching { WaveformExtractor(applicationContext).extract(track, authorization) }.getOrDefault(emptyList()) else AiCache.decodeWaveform(track.waveformCache)
-            if (track.maestCache.isNotBlank() && track.aiSourceModifiedAt == track.modifiedAt) {
-                dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), track.maestCache, track.aiAnalyzedAt, track.aiAnalysisError)
-            } else runCatching { MaestEngine(applicationContext).analyze(track, authorization) }
-                .onSuccess { prediction -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), AiCache.encodePrediction(prediction), System.currentTimeMillis(), "") }
-                .onFailure { error -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), "", System.currentTimeMillis(), error.message ?: "Analisi fallita") }
+        coroutineScope {
+            val gate = Semaphore(parallelism)
+            tracks.map { track -> async {
+                gate.withPermit {
+                    if (isStopped) return@withPermit
+                    val waveform = if (track.waveformCache.isBlank()) runCatching { WaveformExtractor(applicationContext).extract(track, authorization) }.getOrDefault(emptyList()) else AiCache.decodeWaveform(track.waveformCache)
+                    if (track.maestCache.isNotBlank() && track.aiSourceModifiedAt == track.modifiedAt) {
+                        dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), track.maestCache, track.aiAnalyzedAt, track.aiAnalysisError)
+                    } else runCatching { MaestEngine(applicationContext).analyze(track, authorization) }
+                        .onSuccess { prediction -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), AiCache.encodePrediction(prediction), System.currentTimeMillis(), "") }
+                        .onFailure { error -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), "", System.currentTimeMillis(), error.message ?: "Analisi fallita") }
+                    val done = completed.incrementAndGet()
+                    val elapsed = System.currentTimeMillis() - startedAt
+                    val eta = if (done > 0) (elapsed.toDouble() / done * (initialPending - done).coerceAtLeast(0)).toLong() else 0L
+                    setProgress(Data.Builder().putInt(KEY_DONE, done).putInt(KEY_TOTAL, initialPending).putString(KEY_TRACK, track.title).putInt(KEY_PARALLELISM, parallelism).putInt(KEY_SELECTED_PARALLELISM, selectedParallelism).putLong(KEY_ETA_MS, eta).build())
+                    setForeground(notification(done, initialPending, "Turbo ${parallelism}× • ${track.title} • ${formatEta(eta)}"))
+                }
+            } }.awaitAll()
         }
+        if (isStopped) return Result.retry()
         val remaining = dao.pendingAnalysisCount()
         setProgress(Data.Builder().putInt(KEY_DONE, initialPending - remaining).putInt(KEY_TOTAL, initialPending).build())
         return if (remaining > 0) Result.retry() else Result.success()
@@ -74,10 +94,12 @@ class LibraryAnalysisWorker(appContext: Context, params: WorkerParameters) : Cor
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else ForegroundInfo(NOTIFICATION_ID, notification)
     }
+    private fun formatEta(ms: Long): String { val minutes = ms / 60_000; return if (minutes >= 60) "ETA ${minutes / 60}h ${minutes % 60}m" else "ETA ${minutes.coerceAtLeast(1)}m" }
 
     companion object {
         const val UNIQUE_NAME = "falco-library-analysis"
         const val KEY_DONE = "done"; const val KEY_TOTAL = "total"; const val KEY_TRACK = "track"; const val KEY_ERROR = "error"
+        const val KEY_PARALLELISM = "parallelism"; const val KEY_SELECTED_PARALLELISM = "selected_parallelism"; const val KEY_ETA_MS = "eta_ms"
         private const val CHANNEL_ID = "falco_library_analysis"
         private const val NOTIFICATION_ID = 4107
         private const val BATCH_SIZE = 12

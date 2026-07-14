@@ -36,8 +36,9 @@ data class UiState(
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
     val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null,
     val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = "",
+    val analysisParallelism: Int = 1, val effectiveParallelism: Int = 1, val analysisEtaMs: Long = 0,
     val coverArt: ByteArray? = null, val coverLoading: Boolean = false, val backupMessage: String? = null,
-    val aiLearning: AiLearningStats = AiLearningStats()
+    val aiLearning: AiLearningStats = AiLearningStats(), val performance: PerformanceState = PerformanceState()
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -60,14 +61,17 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val maestEngine = MaestEngine(app)
     private val workManager = WorkManager.getInstance(app)
     private val backupManager = BackupManager(app)
+    private val performanceStore = AnalysisPerformanceStore(app)
+    private val performanceMonitor = PerformanceMonitor(app)
     private var coverRequestId: Long = -1
     private var player = createPlayer(app, repo.webDavConfig())
-    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state(), aiLearning = localAi.stats()))
+    private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state(), aiLearning = localAi.stats(), analysisParallelism = performanceStore.selected(), effectiveParallelism = performanceStore.effective()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
     init {
         viewModelScope.launch { repo.tracks.collect { mutable.update { s -> s.copy(tracks = it, loading = false, selected = s.selected?.let { old -> it.find { n -> n.id == old.id } }) } } }
         attachPlayerListener()
         viewModelScope.launch { while (true) { mutable.update { it.copy(position = player.currentPosition.coerceAtLeast(0)) }; delay(500) } }
+        viewModelScope.launch { while (true) { mutable.update { it.copy(performance = performanceMonitor.sample(), effectiveParallelism = if (it.libraryAnalyzing) it.effectiveParallelism else performanceStore.effective()) }; delay(2_000) } }
         viewModelScope.launch {
             workManager.getWorkInfosForUniqueWorkFlow(LibraryAnalysisWorker.UNIQUE_NAME).collect { jobs ->
                 val job = jobs.lastOrNull(); val progress = job?.progress
@@ -75,7 +79,9 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
                     libraryAnalyzing = job?.state == WorkInfo.State.RUNNING || job?.state == WorkInfo.State.ENQUEUED,
                     libraryAnalysisDone = progress?.getInt(LibraryAnalysisWorker.KEY_DONE, 0) ?: 0,
                     libraryAnalysisTotal = progress?.getInt(LibraryAnalysisWorker.KEY_TOTAL, 0) ?: 0,
-                    libraryAnalysisTrack = progress?.getString(LibraryAnalysisWorker.KEY_TRACK).orEmpty()
+                    libraryAnalysisTrack = progress?.getString(LibraryAnalysisWorker.KEY_TRACK).orEmpty(),
+                    effectiveParallelism = progress?.getInt(LibraryAnalysisWorker.KEY_PARALLELISM, performanceStore.effective()) ?: performanceStore.effective(),
+                    analysisEtaMs = progress?.getLong(LibraryAnalysisWorker.KEY_ETA_MS, 0) ?: 0
                 ) }
             }
         }
@@ -143,6 +149,10 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         workManager.enqueueUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME, ExistingWorkPolicy.REPLACE, request)
     }
     fun cancelLibraryAnalysis() = workManager.cancelUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME)
+    fun setAnalysisParallelism(value: Int) {
+        performanceStore.save(value)
+        mutable.update { state -> state.copy(analysisParallelism = performanceStore.selected(), effectiveParallelism = if (state.libraryAnalyzing) state.effectiveParallelism else performanceStore.effective()) }
+    }
     fun exportBackup(uri: Uri) = viewModelScope.launch {
         runCatching { backupManager.write(uri, mutable.value.tracks) }
             .onSuccess { count -> mutable.update { it.copy(backupMessage = "Backup completato: $count brani") } }

@@ -24,8 +24,7 @@ class MaestEngine(private val context: Context) {
         val input = MaestSpectrogram.create(audio)
         val labels = loadLabels()
         val env = OrtEnvironment.getEnvironment()
-        val options = OrtSession.SessionOptions().apply { setIntraOpNumThreads(4); setInterOpNumThreads(1); setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT) }
-        env.createSession(store.modelFile.absolutePath, options).use { session ->
+        val session = sharedSession(store.modelFile.absolutePath)
             val inputName = session.inputNames.first()
             val predictionOutput = session.outputInfo.entries.firstOrNull { (name, node) ->
                 val info = node.info as? TensorInfo; info?.shape?.lastOrNull() == labels.size.toLong() && name.contains("13")
@@ -40,7 +39,6 @@ class MaestEngine(private val context: Context) {
                     MaestPrediction(styles, mapped.first, mapped.second, ((styles.firstOrNull()?.score ?: 0f) * 100).toInt().coerceIn(0, 100), System.currentTimeMillis() - started)
                 }
             }
-        }
     }
 
     private suspend fun loadLabels(): List<String> { val json = JSONObject(store.ensureMetadata().readText()); val array = json.getJSONArray("classes"); return List(array.length()) { array.getString(it) } }
@@ -54,6 +52,26 @@ class MaestEngine(private val context: Context) {
             style.contains("TECH") || style in setOf("MINIMAL","PROGRESSIVE_HOUSE","INDIE_DANCE","TECHNO") -> "TECH_CLUB" to when { style == "MINIMAL_TECHNO" -> "MINIMAL"; style == "DEEP_TECHNO" -> "DEEP_TECH"; else -> style }
             style.contains("POP") || style in setOf("REGGAETON","DANCEHALL","EURODANCE") -> "POP_PARTY" to when { style == "REGGAETON" -> "REGGAETON"; style == "DANCEHALL" -> "DANCEHALL"; else -> "POP_DANCE" }
             else -> "ALTRO" to when { style.contains("HIP_HOP") -> "HIP_HOP"; style.contains("R&B") -> "RNB"; style.contains("FUNK") -> "FUNK"; style.contains("SOUL") -> "SOUL"; else -> "ELECTRONIC" }
+        }
+    }
+
+    companion object {
+        private val lock = Any()
+        @Volatile private var runtime: OrtSession? = null
+        @Volatile private var runtimePath: String = ""
+        @Volatile private var parallelism: Int = 1
+
+        fun configureParallelism(value: Int) = synchronized(lock) {
+            val chosen = value.takeIf { it in AnalysisPerformanceStore.MODES } ?: 1
+            if (chosen != parallelism) { runtime?.close(); runtime = null; runtimePath = ""; parallelism = chosen }
+        }
+
+        fun releaseShared() = synchronized(lock) { runtime?.close(); runtime = null; runtimePath = "" }
+
+        private fun sharedSession(path: String): OrtSession = runtime?.takeIf { runtimePath == path } ?: synchronized(lock) {
+            runtime?.takeIf { runtimePath == path } ?: OrtEnvironment.getEnvironment().createSession(path, OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads((8 / parallelism.coerceAtLeast(1)).coerceIn(1, 4)); setInterOpNumThreads(1); setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            }).also { runtime = it; runtimePath = path }
         }
     }
 }

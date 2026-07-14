@@ -92,6 +92,7 @@ class MaestModelStore(private val context: Context) {
     }
 
     fun remove() {
+        MaestEngine.releaseShared()
         modelFile.delete()
         File(modelDir, "${modelFile.name}.part").delete()
         metadataFile.delete()
