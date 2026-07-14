@@ -49,6 +49,9 @@ import kotlin.math.abs
                 Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)} • preview da 1:00", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             state.aiSuggestion?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.rating?.let { rating = it }; tags = tags.filterNot { it.matches(Regex("E[1-5]")) || it.startsWith("SUB:") }.toSet() + "E${ai.energy}" + (ai.subgenre?.let { setOf("SUB:$it") } ?: emptySet()) }, label = { Text("AI: ${ai.genre ?: "impara"}${ai.subgenre?.let { " › $it" } ?: ""} • E${ai.energy}${ai.rating?.let { " • R$it" } ?: ""} • ${ai.confidence}%", maxLines = 1) }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) }) }
+            if (state.maestAnalyzing) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("MAEST sta ascoltando 30 secondi…", style = MaterialTheme.typography.bodySmall) }
+            state.maestPrediction?.let { ai -> AssistChip(onClick = { ai.genre?.let { genre = it }; ai.subgenre?.let { sub -> tags = tags.filterNot { it.startsWith("SUB:") }.toSet() + "SUB:$sub" } }, label = { Text("MAEST: ${ai.styles.take(3).joinToString(" · ") { "${it.label.substringAfter("---")} ${(it.score * 100).toInt()}%" }}", maxLines = 2) }, leadingIcon = { Icon(Icons.Default.Psychology, null) }) }
+            state.maestError?.let { Text("MAEST: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             if (classify) ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it })
         } }
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {

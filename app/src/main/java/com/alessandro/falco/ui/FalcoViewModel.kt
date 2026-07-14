@@ -28,7 +28,7 @@ data class UiState(
     val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0,
     val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null,
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
-    val maest: MaestModelState = MaestModelState()
+    val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -48,6 +48,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = MusicRepository(app)
     private val localAi = LocalAiEngine(app)
     private val maestStore = MaestModelStore(app)
+    private val maestEngine = MaestEngine(app)
     private var player = createPlayer(app, repo.webDavConfig())
     private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
@@ -92,7 +93,18 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { error -> mutable.update { it.copy(maest = maestStore.state().copy(message = "${error.message ?: "Download interrotto"}. Premi per riprendere.")) } }
     }
     fun removeMaest() { maestStore.remove(); mutable.update { it.copy(maest = maestStore.state()) } }
-    fun loadWaveform(track: TrackEntity) = viewModelScope.launch { mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null) }; val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }; val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList()); mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) } }
+    fun loadWaveform(track: TrackEntity) = viewModelScope.launch {
+        mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestError = null) }
+        val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }
+        val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList())
+        mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) }
+        if (maestStore.state().installed) {
+            mutable.update { it.copy(maestAnalyzing = true) }
+            runCatching { maestEngine.analyze(track, auth) }
+                .onSuccess { prediction -> mutable.update { it.copy(maestPrediction = prediction, maestAnalyzing = false) } }
+                .onFailure { error -> mutable.update { it.copy(maestAnalyzing = false, maestError = error.message ?: "Analisi MAEST fallita") } }
+        }
+    }
     fun saveWebDav(config: WebDavConfig) { repo.saveWebDav(config); player.release(); player = createPlayer(getApplication(), config); attachPlayerListener(); mutable.update { it.copy(webDavConfig = config, webDavMessage = "Connessione salvata") } }
     fun testWebDav(config: WebDavConfig) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; val result = repo.testWebDav(config); mutable.update { it.copy(webDavBusy = false, webDavMessage = if (result.isSuccess) "Connessione riuscita" else result.exceptionOrNull()?.message ?: "Connessione fallita") } }
     fun browseWebDav(path: String) = viewModelScope.launch { mutable.update { it.copy(webDavBusy = true, webDavMessage = null) }; runCatching { repo.browseWebDav(path) }.onSuccess { items -> mutable.update { it.copy(webDavItems = items, webDavPath = path, webDavBusy = false) } }.onFailure { error -> mutable.update { it.copy(webDavBusy = false, webDavMessage = "Errore WebDAV: ${error.message}") } } }

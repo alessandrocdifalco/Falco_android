@@ -21,6 +21,7 @@ data class MaestModelState(
 class MaestModelStore(private val context: Context) {
     private val modelDir = File(context.filesDir, "ai_models")
     val modelFile = File(modelDir, "discogs-maest-30s-pw-519l-2.onnx")
+    val metadataFile = File(modelDir, "discogs-maest-30s-pw-519l-2.json")
 
     fun state(): MaestModelState {
         if (modelFile.isFile && modelFile.length() > MIN_MODEL_BYTES) {
@@ -79,13 +80,26 @@ class MaestModelStore(private val context: Context) {
         }
     }
 
+    suspend fun ensureMetadata(): File = withContext(Dispatchers.IO) {
+        if (metadataFile.isFile && metadataFile.length() > 1000) return@withContext metadataFile
+        modelDir.mkdirs()
+        val request = Request.Builder().url(METADATA_URL).get().build()
+        OkHttpClient().newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("Metadati MAEST: HTTP ${response.code}")
+            metadataFile.writeBytes(response.body?.bytes() ?: error("Metadati MAEST vuoti"))
+        }
+        metadataFile
+    }
+
     fun remove() {
         modelFile.delete()
         File(modelDir, "${modelFile.name}.part").delete()
+        metadataFile.delete()
     }
 
     companion object {
         const val MODEL_URL = "https://essentia.upf.edu/models/feature-extractors/maest/discogs-maest-30s-pw-519l-2.onnx"
+        const val METADATA_URL = "https://essentia.upf.edu/models/feature-extractors/maest/discogs-maest-30s-pw-519l-2.json"
         private const val MIN_MODEL_BYTES = 10L * 1024 * 1024
     }
 }
