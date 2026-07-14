@@ -26,7 +26,7 @@ import com.alessandro.falco.data.*
 import com.alessandro.falco.ui.UiState
 import kotlin.math.abs
 
-@Composable fun ReviewScreen(state: UiState, preview: (TrackEntity) -> Unit, toggle: (TrackEntity) -> Unit, seek: (Long) -> Unit, skip: (Long) -> Unit, review: (TrackEntity, String, String, Int, Set<String>) -> Unit, undo: () -> Unit, loadWaveform: (TrackEntity) -> Unit) {
+@Composable fun ReviewScreen(state: UiState, preview: (TrackEntity) -> Unit, toggle: (TrackEntity) -> Unit, seek: (TrackEntity, Long) -> Unit, skip: (TrackEntity, Long) -> Unit, review: (TrackEntity, String, String, Int, Set<String>) -> Unit, undo: () -> Unit, loadWaveform: (TrackEntity) -> Unit) {
     val current = state.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
     var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
     var genre by remember(current?.id) { mutableStateOf(current?.genre?.takeIf { value -> FalcoTaxonomy.genres.any { it.id == value } }.orEmpty()) }; var rating by remember(current?.id) { mutableIntStateOf(current?.rating ?: 0) }
@@ -36,23 +36,29 @@ import kotlin.math.abs
     Column(Modifier.fillMaxSize()) {
         Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
         if (current == null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Revisione completata", style = MaterialTheme.typography.headlineSmall) }; return@Column }
-        Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth().graphicsLayer { translationX = dragX; translationY = dragY * .18f; rotationZ = dragX / 65f }.pointerInput(current.id) {
-            detectDragGestures(onDragEnd = { val action = when { dragX > 85 -> "KEEP"; dragX < -85 -> "REJECT"; dragY < -120 -> "MAYBE"; else -> null }; dragX = 0f; dragY = 0f; action?.let(::decide) }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
-        }) { Box(Modifier.fillMaxSize()) {
-            if (abs(dragX) > 24f) Text(if (dragX > 0) "TIENI" else "SCARTA", color = if (dragX > 0) Color(0xFF69E38B) else Color(0xFFFF6B78), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, modifier = Modifier.align(if (dragX > 0) Alignment.TopStart else Alignment.TopEnd).padding(16.dp))
-            Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                CoverArt(state.coverArt, state.coverLoading)
-                Spacer(Modifier.height(8.dp))
-                Text(current.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                Spacer(Modifier.height(8.dp)); WaveSeek(state.waveform, state.waveformLoading, state.position, (state.playbackDuration.takeIf { it > 0 } ?: current.durationMs).coerceAtLeast(1), seek)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton({ skip(-30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
-                    FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
-                    IconButton({ skip(30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
+        Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            // Only the artwork/title surface owns the Tinder gesture. Audio navigation below remains independent.
+            Box(Modifier.fillMaxWidth().weight(1f).graphicsLayer { translationX = dragX; translationY = dragY * .18f; rotationZ = dragX / 65f }.pointerInput(current.id) {
+                detectDragGestures(onDragEnd = { val action = when { dragX > 85 -> "KEEP"; dragX < -85 -> "REJECT"; dragY < -120 -> "MAYBE"; else -> null }; dragX = 0f; dragY = 0f; action?.let(::decide) }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
+            }) {
+                if (abs(dragX) > 24f) Text(if (dragX > 0) "TIENI" else "SCARTA", color = if (dragX > 0) Color(0xFF69E38B) else Color(0xFFFF6B78), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, modifier = Modifier.align(if (dragX > 0) Alignment.TopStart else Alignment.TopEnd).padding(8.dp))
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    CoverArt(state.coverArt, state.coverLoading)
+                    Spacer(Modifier.height(6.dp))
+                    Text(current.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
-                Text("${duration(state.position)} / ${duration(state.playbackDuration.takeIf { it > 0 } ?: current.durationMs)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+                val currentIsPlaying = state.playing?.id == current.id
+                val reviewPosition = if (currentIsPlaying) state.position else 0L
+                val reviewDuration = (if (currentIsPlaying) state.playbackDuration.takeIf { it > 0 } else null ?: current.durationMs).coerceAtLeast(1)
+                WaveSeek(state.waveform, state.waveformLoading, reviewPosition, reviewDuration) { seek(current, it) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton({ skip(current, -30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
+                    FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
+                    IconButton({ skip(current, 30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
+                }
+                Text("${duration(reviewPosition)} / ${duration(reviewDuration)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } }
         Column(Modifier.fillMaxWidth().height(260.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
             if (state.maestAnalyzing) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("MAEST sta ascoltando 30 secondi…", style = MaterialTheme.typography.bodySmall) }

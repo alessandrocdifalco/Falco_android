@@ -99,6 +99,15 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun seek(v: Long) = player.seekTo(v)
     fun skip(delta: Long) = player.seekTo((player.currentPosition + delta).coerceIn(0, player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+    fun seekTrack(track: TrackEntity, positionMs: Long) {
+        if (mutable.value.playing?.id == track.id) player.seekTo(positionMs)
+        else playFrom(track, positionMs)
+    }
+    fun skipTrack(track: TrackEntity, delta: Long) {
+        val duration = if (mutable.value.playing?.id == track.id) player.duration.takeIf { it > 0 } ?: track.durationMs else track.durationMs
+        val position = if (mutable.value.playing?.id == track.id) player.currentPosition else 60_000L.coerceAtMost(duration)
+        seekTrack(track, (position + delta).coerceIn(0, duration.coerceAtLeast(0)))
+    }
     fun preview(v: TrackEntity) = playFrom(v, 60_000L)
     fun review(v: TrackEntity, status: String, genre: String = v.genre, rating: Int = v.rating, tags: Set<String> = v.customTags.split(',').filter { it.isNotBlank() }.toSet()) = viewModelScope.launch {
         val energy = tags.firstOrNull { it.matches(Regex("E[1-5]")) }?.drop(1)?.toIntOrNull() ?: mutable.value.aiSuggestion?.energy ?: 3
