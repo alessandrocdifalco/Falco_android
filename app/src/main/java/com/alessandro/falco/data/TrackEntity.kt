@@ -25,7 +25,12 @@ data class TrackEntity(
     val rating: Int = 0,
     val workStatus: String = "DA_VALUTARE",
     val favorite: Boolean = false,
-    val lastScannedAt: Long = System.currentTimeMillis()
+    val lastScannedAt: Long = System.currentTimeMillis(),
+    val waveformCache: String = "",
+    val maestCache: String = "",
+    val aiAnalyzedAt: Long = 0,
+    val aiSourceModifiedAt: Long = 0,
+    val aiAnalysisError: String = ""
 )
 
 data class LibraryStats(

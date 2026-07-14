@@ -31,7 +31,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
                 Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
                 Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seek, vm::skip, vm::review, vm::undoReview, vm::loadWaveform)
                 Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
-                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest)
+                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, vm::startLibraryAnalysis, vm::cancelLibraryAnalysis)
             }
             state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
             state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }

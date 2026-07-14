@@ -6,6 +6,11 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -28,7 +33,8 @@ data class UiState(
     val selected: TrackEntity? = null, val playing: TrackEntity? = null, val isPlaying: Boolean = false, val position: Long = 0,
     val webDavConfig: WebDavConfig = WebDavConfig(), val webDavItems: List<WebDavItem> = emptyList(), val webDavPath: String = "/", val webDavBusy: Boolean = false, val webDavMessage: String? = null,
     val playbackDuration: Long = 0, val lastReviewed: TrackEntity? = null, val waveform: List<Float> = emptyList(), val waveformLoading: Boolean = false, val aiSuggestion: AiSuggestion? = null,
-    val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null
+    val maest: MaestModelState = MaestModelState(), val maestPrediction: MaestPrediction? = null, val maestAnalyzing: Boolean = false, val maestError: String? = null,
+    val libraryAnalyzing: Boolean = false, val libraryAnalysisDone: Int = 0, val libraryAnalysisTotal: Int = 0, val libraryAnalysisTrack: String = ""
 ) {
     val visible: List<TrackEntity> get() {
         val f = tracks.filter { t ->
@@ -49,6 +55,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val localAi = LocalAiEngine(app)
     private val maestStore = MaestModelStore(app)
     private val maestEngine = MaestEngine(app)
+    private val workManager = WorkManager.getInstance(app)
     private var player = createPlayer(app, repo.webDavConfig())
     private val mutable = MutableStateFlow(UiState(webDavConfig = repo.webDavConfig(), maest = maestStore.state()))
     val state: StateFlow<UiState> = mutable.asStateFlow()
@@ -56,6 +63,17 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.tracks.collect { mutable.update { s -> s.copy(tracks = it, loading = false, selected = s.selected?.let { old -> it.find { n -> n.id == old.id } }) } } }
         attachPlayerListener()
         viewModelScope.launch { while (true) { mutable.update { it.copy(position = player.currentPosition.coerceAtLeast(0)) }; delay(500) } }
+        viewModelScope.launch {
+            workManager.getWorkInfosForUniqueWorkFlow(LibraryAnalysisWorker.UNIQUE_NAME).collect { jobs ->
+                val job = jobs.lastOrNull(); val progress = job?.progress
+                mutable.update { state -> state.copy(
+                    libraryAnalyzing = job?.state == WorkInfo.State.RUNNING || job?.state == WorkInfo.State.ENQUEUED,
+                    libraryAnalysisDone = progress?.getInt(LibraryAnalysisWorker.KEY_DONE, 0) ?: 0,
+                    libraryAnalysisTotal = progress?.getInt(LibraryAnalysisWorker.KEY_TOTAL, 0) ?: 0,
+                    libraryAnalysisTrack = progress?.getString(LibraryAnalysisWorker.KEY_TRACK).orEmpty()
+                ) }
+            }
+        }
     }
     fun folders() = repo.folders()
     fun addFolder(uri: Uri) { runCatching { repo.persistFolder(getApplication(), uri) }.onFailure { fail(it) }; scan() }
@@ -93,15 +111,31 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { error -> mutable.update { it.copy(maest = maestStore.state().copy(message = "${error.message ?: "Download interrotto"}. Premi per riprendere.")) } }
     }
     fun removeMaest() { maestStore.remove(); mutable.update { it.copy(maest = maestStore.state()) } }
+    fun startLibraryAnalysis() {
+        if (!maestStore.state().installed) { mutable.update { it.copy(error = "Installa prima il modello MAEST") }; return }
+        val request = OneTimeWorkRequestBuilder<LibraryAnalysisWorker>()
+            .setConstraints(Constraints.Builder().setRequiresBatteryNotLow(true).build()).build()
+        workManager.enqueueUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME, ExistingWorkPolicy.REPLACE, request)
+    }
+    fun cancelLibraryAnalysis() = workManager.cancelUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME)
     fun loadWaveform(track: TrackEntity) = viewModelScope.launch {
         mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestError = null) }
+        val cachedWaveform = AiCache.decodeWaveform(track.waveformCache)
+        val cachedPrediction = AiCache.decodePrediction(track.maestCache)
+        if (cachedWaveform.isNotEmpty() || cachedPrediction != null) {
+            mutable.update { it.copy(waveform = cachedWaveform, waveformLoading = false, aiSuggestion = localAi.suggest(track, cachedWaveform), maestPrediction = cachedPrediction, maestError = track.aiAnalysisError.takeIf(String::isNotBlank)) }
+            return@launch
+        }
         val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }
         val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList())
         mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) }
         if (maestStore.state().installed) {
             mutable.update { it.copy(maestAnalyzing = true) }
             runCatching { maestEngine.analyze(track, auth) }
-                .onSuccess { prediction -> mutable.update { it.copy(maestPrediction = prediction, maestAnalyzing = false) } }
+                .onSuccess { prediction ->
+                    repo.update(track.copy(waveformCache = AiCache.encodeWaveform(peaks), maestCache = AiCache.encodePrediction(prediction), aiAnalyzedAt = System.currentTimeMillis(), aiSourceModifiedAt = track.modifiedAt, aiAnalysisError = ""))
+                    mutable.update { it.copy(maestPrediction = prediction, maestAnalyzing = false) }
+                }
                 .onFailure { error -> mutable.update { it.copy(maestAnalyzing = false, maestError = error.message ?: "Analisi MAEST fallita") } }
         }
     }

@@ -22,7 +22,7 @@ class MusicRepository(context: Context) {
         folders.all().forEach { folder ->
             val existing = dao.forFolder(folder).associateBy { it.uri }
             val scanned = scanner.scan(folder, progress).map { fresh ->
-                existing[fresh.uri]?.let { old -> fresh.copy(id = old.id, customTags = old.customTags, notes = old.notes, rating = old.rating, workStatus = old.workStatus, favorite = old.favorite) } ?: fresh
+                existing[fresh.uri]?.let { old -> fresh.keepUserData(old) } ?: fresh
             }
             dao.upsertAll(scanned)
             if (scanned.isEmpty()) dao.deleteFolder(folder) else dao.deleteMissing(folder, scanned.map { it.uri })
@@ -39,8 +39,21 @@ class MusicRepository(context: Context) {
         val client = WebDavClient(webDavStore.load())
         val existing = dao.forFolder("webdav:${webDavStore.load().name}").associateBy { it.uri }
         val tracks = client.audioFiles(path, recursive, progress).map { item ->
-            val fresh = client.toTrack(item); existing[fresh.uri]?.let { old -> fresh.copy(id = old.id, customTags = old.customTags, notes = old.notes, rating = old.rating, workStatus = old.workStatus, favorite = old.favorite) } ?: fresh
+            val fresh = client.toTrack(item); existing[fresh.uri]?.let { old -> fresh.keepUserData(old) } ?: fresh
         }
         dao.upsertAll(tracks)
     }
+}
+
+private fun TrackEntity.keepUserData(old: TrackEntity): TrackEntity {
+    val unchanged = modifiedAt == old.modifiedAt && sizeBytes == old.sizeBytes
+    return copy(
+        id = old.id, customTags = old.customTags, notes = old.notes, rating = old.rating,
+        workStatus = old.workStatus, favorite = old.favorite,
+        waveformCache = if (unchanged) old.waveformCache else "",
+        maestCache = if (unchanged) old.maestCache else "",
+        aiAnalyzedAt = if (unchanged) old.aiAnalyzedAt else 0,
+        aiSourceModifiedAt = if (unchanged) old.aiSourceModifiedAt else 0,
+        aiAnalysisError = if (unchanged) old.aiAnalysisError else ""
+    )
 }
