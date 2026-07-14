@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 data class MaestModelState(
@@ -56,7 +57,7 @@ class MaestModelStore(private val context: Context) {
                 val base = if (resumed) alreadyDownloaded else 0L
                 val remaining = body.contentLength()
                 val total = if (remaining > 0) base + remaining else -1L
-                partial.outputStream(append = resumed).buffered().use { output ->
+                FileOutputStream(partial, resumed).buffered().use { output ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 4)
                         var copied = base
