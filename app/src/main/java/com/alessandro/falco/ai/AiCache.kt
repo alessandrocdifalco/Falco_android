@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object AiCache {
-    fun encodeWaveform(values: List<Float>) = values.joinToString(",") { "%.4f".format(java.util.Locale.US, it) }
+    fun encodeWaveform(values: List<Float>) = if (values.isEmpty()) "~" else values.joinToString(",") { "%.4f".format(java.util.Locale.US, it) }
     fun decodeWaveform(value: String): List<Float> = if (value.isBlank()) emptyList() else value.split(',').mapNotNull(String::toFloatOrNull)
 
     fun encodePrediction(value: MaestPrediction): String {

@@ -6,7 +6,6 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -175,8 +174,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     fun removeMaest() { maestStore.remove(); mutable.update { it.copy(maest = maestStore.state()) } }
     fun startLibraryAnalysis() {
         if (!maestStore.state().installed) { mutable.update { it.copy(error = "Installa prima il modello MAEST") }; return }
-        val request = OneTimeWorkRequestBuilder<LibraryAnalysisWorker>()
-            .setConstraints(Constraints.Builder().setRequiresBatteryNotLow(true).build()).build()
+        val request = OneTimeWorkRequestBuilder<LibraryAnalysisWorker>().build()
         workManager.enqueueUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME, ExistingWorkPolicy.REPLACE, request)
     }
     fun cancelLibraryAnalysis() = workManager.cancelUniqueWork(LibraryAnalysisWorker.UNIQUE_NAME)

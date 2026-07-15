@@ -33,38 +33,42 @@ class LibraryAnalysisWorker(appContext: Context, params: WorkerParameters) : Cor
         if (!model.state().installed) return Result.failure(Data.Builder().putString(KEY_ERROR, "Modello MAEST non installato").build())
         val config = WebDavStore(applicationContext).load()
         val authorization = config.takeIf { it.ready }?.let { WebDavClient(it).authorization() }
-        val tracks = dao.pendingAnalysis(BATCH_SIZE)
         val initialPending = dao.pendingAnalysisCount()
-        if (tracks.isEmpty()) return Result.success()
-        val selectedParallelism = AnalysisPerformanceStore(applicationContext).selected()
-        val parallelism = AnalysisPerformanceStore(applicationContext).effective()
-        MaestEngine.configureParallelism(parallelism)
+        if (initialPending == 0) return Result.success()
         val startedAt = System.currentTimeMillis()
         val completed = AtomicInteger(0)
         setForeground(notification(0, initialPending, "Preparazione analisi…"))
-        coroutineScope {
-            val gate = Semaphore(parallelism)
-            tracks.map { track -> async {
-                gate.withPermit {
-                    if (isStopped) return@withPermit
-                    val waveform = if (track.waveformCache.isBlank()) runCatching { WaveformExtractor(applicationContext).extract(track, authorization) }.getOrDefault(emptyList()) else AiCache.decodeWaveform(track.waveformCache)
-                    if (track.maestCache.isNotBlank() && track.aiSourceModifiedAt == track.modifiedAt) {
-                        dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), track.maestCache, track.aiAnalyzedAt, track.aiAnalysisError)
-                    } else runCatching { MaestEngine(applicationContext).analyze(track, authorization) }
-                        .onSuccess { prediction -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), AiCache.encodePrediction(prediction), System.currentTimeMillis(), "") }
-                        .onFailure { error -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), "", System.currentTimeMillis(), error.message ?: "Analisi fallita") }
-                    val done = completed.incrementAndGet()
-                    val elapsed = System.currentTimeMillis() - startedAt
-                    val eta = if (done > 0) (elapsed.toDouble() / done * (initialPending - done).coerceAtLeast(0)).toLong() else 0L
-                    setProgress(Data.Builder().putInt(KEY_DONE, done).putInt(KEY_TOTAL, initialPending).putString(KEY_TRACK, track.title).putInt(KEY_PARALLELISM, parallelism).putInt(KEY_SELECTED_PARALLELISM, selectedParallelism).putLong(KEY_ETA_MS, eta).build())
-                    setForeground(notification(done, initialPending, "Turbo ${parallelism}× • ${track.title} • ${formatEta(eta)}"))
-                }
-            } }.awaitAll()
+        while (!isStopped) {
+            val tracks = dao.pendingAnalysis(BATCH_SIZE)
+            if (tracks.isEmpty()) break
+            val performance = AnalysisPerformanceStore(applicationContext)
+            val selectedParallelism = performance.selected()
+            val parallelism = performance.effective()
+            MaestEngine.configureParallelism(parallelism)
+            coroutineScope {
+                val gate = Semaphore(parallelism)
+                tracks.map { track -> async {
+                    gate.withPermit {
+                        if (isStopped) return@withPermit
+                        val waveform = if (track.waveformCache.isBlank()) runCatching { WaveformExtractor(applicationContext).extract(track, authorization) }.getOrDefault(emptyList()) else AiCache.decodeWaveform(track.waveformCache)
+                        if (track.maestCache.isNotBlank() && track.aiSourceModifiedAt == track.modifiedAt) {
+                            dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), track.maestCache, track.aiAnalyzedAt, track.aiAnalysisError)
+                        } else runCatching { MaestEngine(applicationContext).analyze(track, authorization) }
+                            .onSuccess { prediction -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), AiCache.encodePrediction(prediction), System.currentTimeMillis(), "") }
+                            .onFailure { error -> dao.updateAnalysis(track.id, AiCache.encodeWaveform(waveform), "", System.currentTimeMillis(), error.message ?: "Analisi fallita") }
+                        val done = completed.incrementAndGet()
+                        val elapsed = System.currentTimeMillis() - startedAt
+                        val eta = if (done > 0) (elapsed.toDouble() / done * (initialPending - done).coerceAtLeast(0)).toLong() else 0L
+                        setProgress(Data.Builder().putInt(KEY_DONE, done).putInt(KEY_TOTAL, initialPending).putString(KEY_TRACK, track.title).putInt(KEY_PARALLELISM, parallelism).putInt(KEY_SELECTED_PARALLELISM, selectedParallelism).putLong(KEY_ETA_MS, eta).build())
+                        setForeground(notification(done, initialPending, "Turbo ${parallelism}× • ${track.title} • ${formatEta(eta)}"))
+                    }
+                } }.awaitAll()
+            }
         }
         if (isStopped) return Result.retry()
         val remaining = dao.pendingAnalysisCount()
         setProgress(Data.Builder().putInt(KEY_DONE, initialPending - remaining).putInt(KEY_TOTAL, initialPending).build())
-        return if (remaining > 0) Result.retry() else Result.success()
+        return Result.success()
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo = notification(0, 0, "Preparazione analisi…")
