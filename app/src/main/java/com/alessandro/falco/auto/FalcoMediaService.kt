@@ -119,7 +119,7 @@ class FalcoMediaService : MediaLibraryService() {
             } else {
                 player.pause()
             }
-            session.notifyChildrenChanged(REVIEW, childCount(REVIEW), null)
+            this@FalcoMediaService.session.notifyChildrenChanged(REVIEW, childCount(REVIEW), null)
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
