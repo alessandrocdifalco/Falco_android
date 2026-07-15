@@ -4,6 +4,7 @@ package com.alessandro.falco.auto
 
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -20,6 +21,7 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.data.TrackEntity
+import com.alessandro.falco.R
 import com.alessandro.falco.webdav.WebDavClient
 import com.alessandro.falco.webdav.WebDavStore
 import com.google.common.collect.ImmutableList
@@ -42,9 +44,11 @@ class FalcoMediaService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        val config = WebDavStore(this).load()
+        // The car UI must be able to open even if encrypted preferences are temporarily
+        // unavailable (for example immediately after the phone has restarted).
+        val config = runCatching { WebDavStore(this).load() }.getOrNull()
         val dataSource = OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(
-            if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap()
+            if (config?.ready == true) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap()
         )
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
@@ -84,11 +88,15 @@ class FalcoMediaService : MediaLibraryService() {
 
         override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
             super.onPostConnect(session, controller)
-            session.setCustomLayout(controller, listOf(
-                actionButton("Tieni", android.R.drawable.checkbox_on_background, keep),
-                actionButton("Forse", android.R.drawable.ic_menu_recent_history, maybe),
-                actionButton("Scarta", android.R.drawable.ic_menu_close_clear_cancel, reject)
-            ))
+            // Android Auto resolves icons from the application's resources. Framework
+            // android.R icons can make some head units reject the entire media session.
+            runCatching {
+                session.setCustomLayout(controller, listOf(
+                    actionButton("Tieni", R.drawable.ic_auto_keep, keep),
+                    actionButton("Dopo", R.drawable.ic_auto_later, maybe),
+                    actionButton("Scarta", R.drawable.ic_auto_reject, reject)
+                ))
+            }.onFailure { Log.e(TAG, "Unable to publish car review controls", it) }
         }
 
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
@@ -109,7 +117,7 @@ class FalcoMediaService : MediaLibraryService() {
             Futures.immediateFuture(LibraryResult.ofItem(folder(ROOT, "Libreria FALCO"), params))
 
         override fun onGetChildren(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            val items = when {
+            val items = runCatching { when {
                 parentId == ROOT -> listOf(folder(REVIEW, "Revisione"), folder(ALL, "Tutti i brani"), folder(FAVORITES, "Preferiti"), folder(GENRES, "Generi"), folder(ARTISTS, "Artisti"), folder(READY, "Pronti per il set"))
                 parentId == REVIEW -> tracks.filter { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }.sortedByDescending { it.modifiedAt }.map(::reviewSong)
                 parentId == ALL -> tracks.sortedBy { it.title.lowercase() }.map(::song)
@@ -120,10 +128,11 @@ class FalcoMediaService : MediaLibraryService() {
                 parentId.startsWith("genre:") -> tracks.filter { it.genre.ifBlank { "Sconosciuto" } == Uri.decode(parentId.removePrefix("genre:")) }.sortedBy { it.title.lowercase() }.map(::song)
                 parentId.startsWith("artist:") -> tracks.filter { it.artist.ifBlank { "Sconosciuto" } == Uri.decode(parentId.removePrefix("artist:")) }.sortedBy { it.title.lowercase() }.map(::song)
                 else -> emptyList()
+            } }.getOrElse {
+                Log.e(TAG, "Unable to load car library parent=$parentId", it)
+                emptyList()
             }
-            val from = (page * pageSize).coerceAtMost(items.size)
-            val to = (from + pageSize).coerceAtMost(items.size)
-            return Futures.immediateFuture(LibraryResult.ofItemList(items.subList(from, to), params))
+            return Futures.immediateFuture(LibraryResult.ofItemList(page(items, page, pageSize), params))
         }
 
         override fun onGetItem(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> {
@@ -139,8 +148,7 @@ class FalcoMediaService : MediaLibraryService() {
 
         override fun onGetSearchResult(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             val found = search(query).map(::song)
-            val from = (page * pageSize).coerceAtMost(found.size); val to = (from + pageSize).coerceAtMost(found.size)
-            return Futures.immediateFuture(LibraryResult.ofItemList(found.subList(from, to), params))
+            return Futures.immediateFuture(LibraryResult.ofItemList(page(found, page, pageSize), params))
         }
 
         override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: List<MediaItem>): ListenableFuture<List<MediaItem>> {
@@ -153,6 +161,17 @@ class FalcoMediaService : MediaLibraryService() {
         val q = query.trim()
         if (q.isBlank()) return emptyList()
         return tracks.filter { listOf(it.title, it.artist, it.album, it.genre, it.customTags).any { value -> value.contains(q, true) } }.sortedBy { it.title.lowercase() }
+    }
+
+    /** Some OEM head units request pageSize=0 or use values large enough to overflow Int. */
+    private fun <T> page(items: List<T>, requestedPage: Int, requestedSize: Int): List<T> {
+        if (items.isEmpty()) return emptyList()
+        val size = if (requestedSize <= 0) items.size else requestedSize
+        val fromLong = requestedPage.coerceAtLeast(0).toLong() * size.toLong()
+        if (fromLong >= items.size) return emptyList()
+        val from = fromLong.toInt()
+        val to = (fromLong + size.toLong()).coerceAtMost(items.size.toLong()).toInt()
+        return items.subList(from, to)
     }
 
     private fun childCount(parent: String): Int = when (parent) {
@@ -188,6 +207,7 @@ class FalcoMediaService : MediaLibraryService() {
     }
 
     companion object {
+        private const val TAG = "FalcoAuto"
         private const val ROOT = "root"; private const val ALL = "all"; private const val FAVORITES = "favorites"
         private const val GENRES = "genres"; private const val ARTISTS = "artists"; private const val READY = "ready"; private const val REVIEW = "review"
         private const val ACTION_KEEP = "com.alessandro.falco.KEEP"; private const val ACTION_MAYBE = "com.alessandro.falco.MAYBE"; private const val ACTION_REJECT = "com.alessandro.falco.REJECT"
