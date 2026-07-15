@@ -24,6 +24,7 @@ import com.alessandro.falco.audio.CoverArtExtractor
 import com.alessandro.falco.ai.*
 import okhttp3.OkHttpClient
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -157,10 +158,10 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         mutable.update { state -> state.copy(tracks = state.tracks.map { if (it.id == v.id) updatedTrack else it }, lastReviewed = v) }
         val next = mutable.value.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
         if (wasPlaying) { if (next != null) playFrom(next, 60_000L.coerceAtMost(next.durationMs.coerceAtLeast(60_000L))) else player.pause() }
+        viewModelScope.launch { repo.update(updatedTrack) }
         viewModelScope.launch {
             localAi.learn(v, waveform, genre, subgenre, energy, rating, status, prediction)
             mutable.update { it.copy(aiLearning = localAi.stats()) }
-            repo.update(updatedTrack)
         }
     }
     fun undoReview() = viewModelScope.launch { mutable.value.lastReviewed?.let { repo.update(it); mutable.update { s -> s.copy(lastReviewed = null) } } }
@@ -205,19 +206,21 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun loadWaveform(track: TrackEntity) = viewModelScope.launch {
         coverRequestId = track.id
-        mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestError = null, coverArt = null, coverLoading = true) }
+        mutable.update { it.copy(waveform = emptyList(), waveformLoading = true, aiSuggestion = null, maestPrediction = null, maestAnalyzing = false, maestError = null, coverArt = null, coverLoading = true) }
         val auth = mutable.value.webDavConfig.takeIf { track.uri.startsWith("http") && it.ready }?.let { WebDavClient(it).authorization() }
         launch {
-            val art = runCatching { CoverArtExtractor(getApplication()).extract(track, auth) }.getOrNull()
+            val art = withTimeoutOrNull(8_000) { runCatching { CoverArtExtractor(getApplication()).extract(track, auth) }.getOrNull() }
             if (coverRequestId == track.id) mutable.update { it.copy(coverArt = art, coverLoading = false) }
         }
         val cachedWaveform = AiCache.decodeWaveform(track.waveformCache)
         val cachedPrediction = AiCache.decodePrediction(track.maestCache)
         if (cachedWaveform.isNotEmpty()) {
+            if (coverRequestId != track.id) return@launch
             mutable.update { it.copy(waveform = cachedWaveform, waveformLoading = false, aiSuggestion = localAi.suggest(track, cachedWaveform), maestPrediction = cachedPrediction, maestError = track.aiAnalysisError.takeIf(String::isNotBlank)) }
             return@launch
         }
         val peaks = runCatching { WaveformExtractor(getApplication()).extract(track, auth) }.getOrDefault(emptyList())
+        if (coverRequestId != track.id) return@launch
         mutable.update { it.copy(waveform = peaks, waveformLoading = false, aiSuggestion = localAi.suggest(track, peaks)) }
         if (cachedPrediction != null) {
             repo.update(track.copy(waveformCache = AiCache.encodeWaveform(peaks)))
@@ -226,10 +229,11 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
             mutable.update { it.copy(maestAnalyzing = true) }
             runCatching { maestEngine.analyze(track, auth) }
                 .onSuccess { prediction ->
+                    if (coverRequestId != track.id) return@onSuccess
                     repo.update(track.copy(waveformCache = AiCache.encodeWaveform(peaks), maestCache = AiCache.encodePrediction(prediction), aiAnalyzedAt = System.currentTimeMillis(), aiSourceModifiedAt = track.modifiedAt, aiAnalysisError = ""))
                     mutable.update { it.copy(maestPrediction = prediction, maestAnalyzing = false) }
                 }
-                .onFailure { error -> mutable.update { it.copy(maestAnalyzing = false, maestError = error.message ?: "Analisi MAEST fallita") } }
+                .onFailure { error -> if (coverRequestId == track.id) mutable.update { it.copy(maestAnalyzing = false, maestError = error.message ?: "Analisi MAEST fallita") } }
         }
     }
     fun saveWebDav(config: WebDavConfig) { repo.saveWebDav(config); player.release(); previewPlayer.release(); player = createPlayer(getApplication(), config); previewPlayer = createPlayer(getApplication(), config); preloadedTrackId = -1L; attachPlayerListener(); mutable.update { it.copy(webDavConfig = config, webDavMessage = "Connessione salvata") } }

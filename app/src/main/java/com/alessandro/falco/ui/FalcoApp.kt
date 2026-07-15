@@ -45,7 +45,7 @@ private enum class Destination(val label: String, val icon: ImageVector) { Dashb
                 Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis, vm::setAnalysisParallelism, vm::setAutomaticPerformanceScaling, vm::resetDatabase, { backupWriter.launch("falco-backup.json") }, { backupReader.launch(arrayOf("application/json")) })
             }
             state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
-            state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }
+            if (destination != Destination.Review) state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }
         }
     }
 }
