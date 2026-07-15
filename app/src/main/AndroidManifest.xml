@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <application
         android:allowBackup="true"
+        android:appCategory="audio"
+        android:icon="@drawable/ic_falco_app"
+        android:roundIcon="@drawable/ic_falco_app"
         android:label="FALCO"
         android:supportsRtl="true"
         android:theme="@style/Theme.Falco">
@@ -33,6 +36,7 @@
             tools:node="merge" />
         <service
             android:name=".auto.FalcoMediaService"
+            android:enabled="true"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>

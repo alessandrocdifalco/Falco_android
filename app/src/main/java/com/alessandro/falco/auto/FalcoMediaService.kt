@@ -52,7 +52,14 @@ class FalcoMediaService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .build()
         session = MediaLibrarySession.Builder(this, player, LibraryCallback()).build()
-        scope.launch { dao.observeAll().collectLatest { tracks = it } }
+        scope.launch { dao.observeAll().collectLatest { fresh ->
+            tracks = fresh
+            if (::session.isInitialized) {
+                listOf(ROOT, REVIEW, ALL, FAVORITES, GENRES, ARTISTS, READY).forEach { parent ->
+                    session.notifyChildrenChanged(parent, childCount(parent), null)
+                }
+            }
+        } }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
@@ -91,8 +98,9 @@ class FalcoMediaService : MediaLibraryService() {
                 ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
             val current = tracks.firstOrNull { it.id == currentId }
                 ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            tracks = tracks.map { if (it.id == currentId) it.copy(workStatus = status) else it }
             scope.launch { dao.update(current.copy(workStatus = status)) }
-            val next = tracks.firstOrNull { it.id != currentId && (it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE") }
+            val next = tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
             if (next != null) { player.setMediaItem(song(next)); player.prepare(); player.play() } else player.pause()
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
@@ -145,6 +153,16 @@ class FalcoMediaService : MediaLibraryService() {
         val q = query.trim()
         if (q.isBlank()) return emptyList()
         return tracks.filter { listOf(it.title, it.artist, it.album, it.genre, it.customTags).any { value -> value.contains(q, true) } }.sortedBy { it.title.lowercase() }
+    }
+
+    private fun childCount(parent: String): Int = when (parent) {
+        ROOT -> 6
+        REVIEW -> tracks.count { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
+        FAVORITES -> tracks.count { it.favorite }
+        READY -> tracks.count { it.workStatus == "PRONTO" || it.workStatus == "KEEP" }
+        GENRES -> tracks.map { it.genre }.distinct().size
+        ARTISTS -> tracks.map { it.artist }.distinct().size
+        else -> tracks.size
     }
 
     private fun folder(id: String, title: String) = MediaItem.Builder().setMediaId(id).setMediaMetadata(

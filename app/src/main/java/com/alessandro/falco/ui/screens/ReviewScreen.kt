@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -36,17 +37,20 @@ import kotlin.math.abs
     Column(Modifier.fillMaxSize()) {
         Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
         if (current == null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Revisione completata", style = MaterialTheme.typography.headlineSmall) }; return@Column }
-        key(current.id) { Card(Modifier.padding(horizontal = 16.dp).weight(1f).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        key(current.id) { Card(Modifier.padding(horizontal = 12.dp).weight(1f).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // Only the artwork/title surface owns the Tinder gesture. Audio navigation below remains independent.
             Box(Modifier.fillMaxWidth().weight(1f).graphicsLayer { translationX = dragX; translationY = dragY * .18f; rotationZ = dragX / 65f }.pointerInput(current.id) {
                 detectDragGestures(onDragEnd = { val action = when { dragX > 85 -> "KEEP"; dragX < -85 -> "REJECT"; dragY < -120 -> "MAYBE"; else -> null }; dragX = 0f; dragY = 0f; action?.let(::decide) }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
             }) {
                 if (abs(dragX) > 24f) Text(if (dragX > 0) "TIENI" else "SCARTA", color = if (dragX > 0) Color(0xFF69E38B) else Color(0xFFFF6B78), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, modifier = Modifier.align(if (dragX > 0) Alignment.TopStart else Alignment.TopEnd).padding(8.dp))
-                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     CoverArt(state.coverArt, state.coverLoading)
-                    Spacer(Modifier.height(6.dp))
-                    Text(current.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(current.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(current.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        Text(current.album.ifBlank { current.format }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        Text("Trascina ← scarta  •  → tieni", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
                 val currentIsPlaying = state.playing?.id == current.id
@@ -55,11 +59,10 @@ import kotlin.math.abs
                 val reviewDuration = (activeDuration ?: current.durationMs).coerceAtLeast(1)
                 WaveSeek(state.waveform, state.waveformLoading, reviewPosition, reviewDuration) { seek(current, it) }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton({ skip(current, -30_000) }) { Icon(Icons.Default.Replay30, "Indietro 30 secondi") }
-                    FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(58.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
-                    IconButton({ skip(current, 30_000) }) { Icon(Icons.Default.Forward30, "Avanti 30 secondi") }
+                    FilledTonalIconButton({ skip(current, -15_000) }, Modifier.size(52.dp)) { Text("−15", fontWeight = FontWeight.Black) }
+                    FilledIconButton({ if (state.playing?.id == current.id) toggle(current) else preview(current) }, Modifier.size(68.dp)) { Icon(if (state.playing?.id == current.id && state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, Modifier.size(34.dp)) }
+                    FilledTonalIconButton({ skip(current, 15_000) }, Modifier.size(52.dp)) { Text("+15", fontWeight = FontWeight.Black) }
                 }
-                Text("${duration(reviewPosition)} / ${duration(reviewDuration)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } } }
         Column(Modifier.fillMaxWidth().height(260.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
             if (state.maestAnalyzing) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("MAEST sta ascoltando 30 secondi…", style = MaterialTheme.typography.bodySmall) }
@@ -71,17 +74,17 @@ import kotlin.math.abs
             state.maestError?.let { Text("MAEST: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             key(current.id) { ClassificationPanel(genre, { genre = it }, rating, { rating = it }, tags, { tags = it }) }
         }
-        Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            FilledTonalIconButton({ decide("REJECT") }, Modifier.size(58.dp), colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color(0xFF4A2028))) { Icon(Icons.Default.Close, "Reject") }
-            FilledTonalIconButton({ decide("MAYBE") }, Modifier.size(58.dp)) { Icon(Icons.Default.Schedule, "Maybe") }
-            FilledIconButton({ decide("KEEP") }, Modifier.size(58.dp)) { Icon(Icons.Default.Check, "Keep") }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button({ decide("REJECT") }, Modifier.weight(1f).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF642834))) { Icon(Icons.Default.Close, null); Spacer(Modifier.width(4.dp)); Text("SCARTA") }
+            FilledTonalButton({ decide("MAYBE") }, Modifier.weight(1f).height(52.dp)) { Icon(Icons.Default.Schedule, null); Spacer(Modifier.width(4.dp)); Text("DOPO") }
+            Button({ decide("KEEP") }, Modifier.weight(1f).height(52.dp)) { Icon(Icons.Default.Check, null); Spacer(Modifier.width(4.dp)); Text("TIENI") }
         }
     }
 }
 
 @Composable private fun CoverArt(bytes: ByteArray?, loading: Boolean) {
     val bitmap = remember(bytes) { bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.asImageBitmap() }
-    Card(Modifier.size(116.dp), shape = MaterialTheme.shapes.medium) {
+    Card(Modifier.size(108.dp), shape = MaterialTheme.shapes.medium) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (bitmap != null) Image(bitmap, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else if (loading) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
@@ -92,13 +95,15 @@ import kotlin.math.abs
 
 @Composable private fun WaveSeek(peaks: List<Float>, loading: Boolean, position: Long, total: Long, seek: (Long) -> Unit) {
     if (loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); return }
-    var windowMs by remember { mutableLongStateOf(60_000L) }
-    val actualWindow = windowMs.coerceAtMost(total); val start = (position - actualWindow / 2).coerceIn(0, (total - actualWindow).coerceAtLeast(0)); val end = start + actualWindow
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { listOf(30_000L to "30s", 60_000L to "60s", Long.MAX_VALUE to "Tutto").forEach { (value, label) -> FilterChip(selected = if (value == Long.MAX_VALUE) windowMs >= total else windowMs == value, onClick = { windowMs = if (value == Long.MAX_VALUE) total else value }, label = { Text(label, style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.height(28.dp)) } }
-    Canvas(Modifier.fillMaxWidth().height(58.dp).pointerInput(total, start, actualWindow) { detectDragGestures(onDragStart = { seek((start + it.x / size.width * actualWindow).toLong().coerceIn(0, total)) }) { change, _ -> seek((start + change.position.x / size.width * actualWindow).toLong().coerceIn(0, total)) } }) {
-        val all = peaks.ifEmpty { listOf(.15f) }; val from = (start.toDouble() / total * all.size).toInt().coerceIn(0, all.lastIndex); val to = (end.toDouble() / total * all.size).toInt().coerceIn(from + 1, all.size); val data = all.subList(from, to); val played = ((position - start).toFloat() / actualWindow).coerceIn(0f, 1f)
+    var dragging by remember { mutableStateOf(false) }; var slider by remember { mutableFloatStateOf(position.toFloat()) }
+    LaunchedEffect(position, dragging) { if (!dragging) slider = position.toFloat() }
+    val safeTotal = total.coerceAtLeast(1L); val played = (slider / safeTotal.toFloat()).coerceIn(0f, 1f)
+    Canvas(Modifier.fillMaxWidth().height(64.dp).pointerInput(safeTotal) { detectTapGestures { point -> seek((point.x / size.width * safeTotal).toLong().coerceIn(0, safeTotal)) } }) {
+        val data = peaks.ifEmpty { List(80) { .15f } }
         data.forEachIndexed { i, value -> val x = i * size.width / data.size; val wave = value.coerceIn(.025f, 1f) * size.height; drawLine(if (i.toFloat() / data.size <= played) Color(0xFFF9A90A) else Color(0xFF4B5262), Offset(x, (size.height-wave)/2), Offset(x, (size.height+wave)/2), maxOf(1.5f, size.width/data.size*.62f)) }
     }
+    Slider(value = slider.coerceIn(0f, safeTotal.toFloat()), onValueChange = { dragging = true; slider = it }, onValueChangeFinished = { seek(slider.toLong()); dragging = false }, valueRange = 0f..safeTotal.toFloat(), modifier = Modifier.fillMaxWidth())
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(duration(slider.toLong()), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold); Text(duration(safeTotal), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
