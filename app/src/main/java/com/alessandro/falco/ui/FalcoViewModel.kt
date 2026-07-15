@@ -15,6 +15,12 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.alessandro.falco.data.*
 import com.alessandro.falco.webdav.*
@@ -23,9 +29,11 @@ import com.alessandro.falco.audio.CoverArtExtractor
 import com.alessandro.falco.ai.*
 import okhttp3.OkHttpClient
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 enum class SortMode(val label: String) { TITLE("Titolo"), ARTIST("Artista"), DATE("Data"), DURATION("Durata"), SIZE("Dimensione") }
 data class Filters(val genre: String? = null, val artist: String? = null, val format: String? = null, val year: Int? = null, val rating: Int? = null, val status: String? = null, val favorites: Boolean = false)
@@ -66,6 +74,9 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private val performanceMonitor = PerformanceMonitor(app)
     private var coverRequestId: Long = -1
     private val httpClient = OkHttpClient.Builder().retryOnConnectionFailure(true).build()
+    private val cacheDatabase = StandaloneDatabaseProvider(app)
+    private val audioCache = SimpleCache(app.cacheDir.resolve("audio_preview_cache"), LeastRecentlyUsedCacheEvictor(512L * 1024 * 1024), cacheDatabase)
+    private val cachingTracks = ConcurrentHashMap.newKeySet<Long>()
     private var player = createPlayer(app, repo.webDavConfig())
     private var previewPlayer = createPlayer(app, repo.webDavConfig())
     private var preloadedTrackId = -1L
@@ -116,12 +127,14 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
             previewPlayer = createPlayer(getApplication(), mutable.value.webDavConfig)
             preloadedTrackId = -1L
             attachPlayerListener()
+            player.seekTo(startAtMs)
             player.play()
             mutable.update { it.copy(playing = v, position = startAtMs) }
             preloadNextAfter(v)
             return
         }
-        player.setMediaItem(MediaItem.fromUri(v.uri)); startAtMs?.let(player::seekTo); player.prepare(); player.play(); mutable.update { it.copy(playing = v, position = startAtMs ?: 0) }
+        player.setMediaItem(MediaItem.fromUri(v.uri), startAtMs ?: 0L); player.prepare(); player.play(); mutable.update { it.copy(playing = v, position = startAtMs ?: 0) }
+        prefetch(v)
         if (startAtMs != null) preloadNextAfter(v)
     }
     private fun preloadNextAfter(track: TrackEntity) {
@@ -130,10 +143,37 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     }
     private fun preloadReview(track: TrackEntity) {
         if (track.id == mutable.value.playing?.id || track.id == preloadedTrackId) return
-        val start = 60_000L.coerceAtMost(track.durationMs.coerceAtLeast(0L))
+        val start = previewStart(track)
         previewPlayer.setMediaItem(MediaItem.fromUri(track.uri), start)
         previewPlayer.prepare()
         preloadedTrackId = track.id
+        prefetch(track)
+    }
+    private fun previewStart(track: TrackEntity): Long {
+        val duration = track.durationMs.coerceAtLeast(0L)
+        val fallback = 60_000L.coerceAtMost((duration - 15_000L).coerceAtLeast(0L))
+        val waveform = AiCache.decodeWaveform(track.waveformCache)
+        if (waveform.size < 30 || duration < 75_000L) return fallback
+        val from = (20_000.0 / duration * waveform.size).toInt().coerceIn(5, waveform.lastIndex)
+        val to = (minOf(120_000L, duration * 45 / 100).toDouble() / duration * waveform.size).toInt().coerceIn(from, waveform.lastIndex)
+        val candidate = (from..to).mapNotNull { index ->
+            val before = waveform.subList((index - 5).coerceAtLeast(0), index).average().toFloat()
+            val after = waveform.subList(index, (index + 6).coerceAtMost(waveform.size)).average().toFloat()
+            val rise = after - before
+            if (after >= .58f && rise >= .13f) index to (rise + after * .12f) else null
+        }.maxByOrNull { it.second }?.first ?: return fallback
+        return (candidate.toDouble() / waveform.size * duration).toLong().coerceIn(20_000L, (duration - 15_000L).coerceAtLeast(20_000L))
+    }
+    private fun prefetch(track: TrackEntity) {
+        if (!track.uri.startsWith("http") || !cachingTracks.add(track.id)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val source = cacheFactory(mutable.value.webDavConfig).createDataSourceForDownloading()
+                CacheWriter(source, DataSpec(Uri.parse(track.uri)), null, null).cache()
+            } catch (_: Throwable) {
+                // Playback remains available through the upstream WebDAV source.
+            } finally { cachingTracks.remove(track.id) }
+        }
     }
     fun seek(v: Long) = player.seekTo(v)
     fun skip(delta: Long) = player.seekTo((player.currentPosition + delta).coerceIn(0, player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
@@ -143,10 +183,10 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun skipTrack(track: TrackEntity, delta: Long) {
         val duration = if (mutable.value.playing?.id == track.id) player.duration.takeIf { it > 0 } ?: track.durationMs else track.durationMs
-        val position = if (mutable.value.playing?.id == track.id) player.currentPosition else 60_000L.coerceAtMost(duration)
+        val position = if (mutable.value.playing?.id == track.id) player.currentPosition else previewStart(track).coerceAtMost(duration)
         seekTrack(track, (position + delta).coerceIn(0, duration.coerceAtLeast(0)))
     }
-    fun preview(v: TrackEntity) = playFrom(v, 60_000L)
+    fun preview(v: TrackEntity) = playFrom(v, previewStart(v))
     fun review(v: TrackEntity, status: String, genre: String = v.genre, rating: Int = v.rating, tags: Set<String> = v.customTags.split(',').filter { it.isNotBlank() }.toSet()) {
         val energy = tags.firstOrNull { it.matches(Regex("E[1-5]")) }?.drop(1)?.toIntOrNull() ?: mutable.value.aiSuggestion?.energy ?: 3
         val subgenre = tags.firstOrNull { it.startsWith("SUB:") }?.removePrefix("SUB:") ?: genre
@@ -156,7 +196,7 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
         val wasPlaying = mutable.value.playing?.id == v.id
         mutable.update { state -> state.copy(tracks = state.tracks.map { if (it.id == v.id) updatedTrack else it }, lastReviewed = v) }
         val next = mutable.value.tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
-        if (wasPlaying) { if (next != null) playFrom(next, 60_000L.coerceAtMost(next.durationMs.coerceAtLeast(60_000L))) else player.pause() }
+        if (wasPlaying) { if (next != null) playFrom(next, previewStart(next)) else player.pause() }
         viewModelScope.launch { repo.update(updatedTrack) }
         viewModelScope.launch {
             localAi.learn(v, waveform, genre, subgenre, energy, rating, status, prediction)
@@ -241,10 +281,13 @@ class FalcoViewModel(app: Application) : AndroidViewModel(app) {
     private fun attachPlayerListener() { player.addListener(object : Player.Listener { override fun onIsPlayingChanged(v: Boolean) { mutable.update { it.copy(isPlaying = v) } }; override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) mutable.update { it.copy(playbackDuration = player.duration.coerceAtLeast(0)) } } }) }
     fun playWebDav(item: WebDavItem) = play(WebDavClient(mutable.value.webDavConfig).toTrack(item))
     private fun createPlayer(app: Application, config: WebDavConfig): ExoPlayer {
-        val factory = OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap())
         val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 45_000, 350, 700).setPrioritizeTimeOverSizeThresholds(true).build()
-        return ExoPlayer.Builder(app).setMediaSourceFactory(DefaultMediaSourceFactory(factory)).setLoadControl(loadControl).build()
+        return ExoPlayer.Builder(app).setMediaSourceFactory(DefaultMediaSourceFactory(cacheFactory(config))).setLoadControl(loadControl).build()
+    }
+    private fun cacheFactory(config: WebDavConfig): CacheDataSource.Factory {
+        val upstream = OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(if (config.ready) mapOf("Authorization" to WebDavClient(config).authorization()) else emptyMap())
+        return CacheDataSource.Factory().setCache(audioCache).setUpstreamDataSourceFactory(upstream).setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
     private fun fail(t: Throwable) = mutable.update { it.copy(error = t.message ?: "Errore imprevisto", scanning = false, loading = false) }
-    override fun onCleared() { player.release(); previewPlayer.release(); super.onCleared() }
+    override fun onCleared() { player.release(); previewPlayer.release(); runCatching { audioCache.release() }; super.onCleared() }
 }

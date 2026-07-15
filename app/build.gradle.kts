@@ -13,8 +13,8 @@ android {
         applicationId = "com.alessandro.falco"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.1.2"
+        versionCode = 6
+        versionName = "1.2.0"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -44,6 +44,7 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
+    implementation("androidx.media3:media3-database:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

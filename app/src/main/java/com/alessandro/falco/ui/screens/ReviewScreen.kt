@@ -37,9 +37,9 @@ import kotlin.math.abs
     Column(Modifier.fillMaxSize()) {
         Header("Revisione", "${state.tracks.count { it.workStatus == "DA_VALUTARE" }} brani da ascoltare") { if (state.lastReviewed != null) IconButton(undo) { Icon(Icons.Default.Undo, "Annulla") } }
         if (current == null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Revisione completata", style = MaterialTheme.typography.headlineSmall) }; return@Column }
-        key(current.id) { Card(Modifier.padding(horizontal = 12.dp).weight(1f).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        key(current.id) { Card(Modifier.padding(horizontal = 12.dp).height(300.dp).fillMaxWidth()) { Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
             // Only the artwork/title surface owns the Tinder gesture. Audio navigation below remains independent.
-            Box(Modifier.fillMaxWidth().weight(1f).graphicsLayer { translationX = dragX; translationY = dragY * .18f; rotationZ = dragX / 65f }.pointerInput(current.id) {
+            Box(Modifier.fillMaxWidth().height(102.dp).graphicsLayer { translationX = dragX; translationY = dragY * .18f; rotationZ = dragX / 65f }.pointerInput(current.id) {
                 detectDragGestures(onDragEnd = { val action = when { dragX > 85 -> "KEEP"; dragX < -85 -> "REJECT"; dragY < -120 -> "MAYBE"; else -> null }; dragX = 0f; dragY = 0f; action?.let(::decide) }) { change, amount -> change.consume(); dragX += amount.x; dragY += amount.y }
             }) {
                 if (abs(dragX) > 24f) Text(if (dragX > 0) "TIENI" else "SCARTA", color = if (dragX > 0) Color(0xFF69E38B) else Color(0xFFFF6B78), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, modifier = Modifier.align(if (dragX > 0) Alignment.TopStart else Alignment.TopEnd).padding(8.dp))
@@ -64,7 +64,7 @@ import kotlin.math.abs
                     FilledTonalIconButton({ skip(current, 15_000) }, Modifier.size(52.dp)) { Text("+15", fontWeight = FontWeight.Black) }
                 }
         } } }
-        Column(Modifier.fillMaxWidth().height(260.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Column(Modifier.fillMaxWidth().weight(1f).heightIn(min = 220.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
             if (state.maestAnalyzing) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("MAEST sta ascoltando 30 secondi…", style = MaterialTheme.typography.bodySmall) }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(max = 42.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 state.aiSuggestion?.rejectProbability?.takeIf { it >= 60 }?.let { probability -> AssistChip(onClick = {}, label = { Text("Probabilmente da scartare • $probability% (${state.aiSuggestion.rejectionNeighbors} simili)", maxLines = 1) }, leadingIcon = { Icon(Icons.Default.DeleteSweep, null, tint = MaterialTheme.colorScheme.error) }, colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.error)) }
@@ -84,7 +84,7 @@ import kotlin.math.abs
 
 @Composable private fun CoverArt(bytes: ByteArray?, loading: Boolean) {
     val bitmap = remember(bytes) { bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.asImageBitmap() }
-    Card(Modifier.size(108.dp), shape = MaterialTheme.shapes.medium) {
+    Card(Modifier.size(88.dp), shape = MaterialTheme.shapes.medium) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (bitmap != null) Image(bitmap, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else if (loading) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
@@ -98,11 +98,11 @@ import kotlin.math.abs
     var dragging by remember { mutableStateOf(false) }; var slider by remember { mutableFloatStateOf(position.toFloat()) }
     LaunchedEffect(position, dragging) { if (!dragging) slider = position.toFloat() }
     val safeTotal = total.coerceAtLeast(1L); val played = (slider / safeTotal.toFloat()).coerceIn(0f, 1f)
-    Canvas(Modifier.fillMaxWidth().height(64.dp).pointerInput(safeTotal) { detectTapGestures { point -> seek((point.x / size.width * safeTotal).toLong().coerceIn(0, safeTotal)) } }) {
+    Canvas(Modifier.fillMaxWidth().height(48.dp).pointerInput(safeTotal) { detectTapGestures { point -> seek((point.x / size.width * safeTotal).toLong().coerceIn(0, safeTotal)) } }) {
         val data = peaks.ifEmpty { List(80) { .15f } }
         data.forEachIndexed { i, value -> val x = i * size.width / data.size; val wave = value.coerceIn(.025f, 1f) * size.height; drawLine(if (i.toFloat() / data.size <= played) Color(0xFFF9A90A) else Color(0xFF4B5262), Offset(x, (size.height-wave)/2), Offset(x, (size.height+wave)/2), maxOf(1.5f, size.width/data.size*.62f)) }
     }
-    Slider(value = slider.coerceIn(0f, safeTotal.toFloat()), onValueChange = { dragging = true; slider = it }, onValueChangeFinished = { seek(slider.toLong()); dragging = false }, valueRange = 0f..safeTotal.toFloat(), modifier = Modifier.fillMaxWidth())
+    Slider(value = slider.coerceIn(0f, safeTotal.toFloat()), onValueChange = { dragging = true; slider = it }, onValueChangeFinished = { seek(slider.toLong()); dragging = false }, valueRange = 0f..safeTotal.toFloat(), modifier = Modifier.fillMaxWidth().height(34.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(duration(slider.toLong()), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold); Text(duration(safeTotal), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
 
