@@ -3,18 +3,24 @@
 package com.alessandro.falco.auto
 
 import android.net.Uri
+import android.os.Bundle
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.session.CommandButton
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
+import com.alessandro.falco.R
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.data.TrackEntity
 import com.alessandro.falco.webdav.WebDavClient
@@ -50,7 +56,9 @@ class FalcoMediaService : MediaLibraryService() {
             .setAudioAttributes(AudioAttributes.DEFAULT, true)
             .setHandleAudioBecomingNoisy(true)
             .build()
-        session = MediaLibrarySession.Builder(this, player, LibraryCallback()).build()
+        session = MediaLibrarySession.Builder(this, player, LibraryCallback())
+            .setCommandButtonsForMediaItems(reviewButtons())
+            .build()
         scope.launch { dao.observeAll().collectLatest { fresh ->
             tracks = fresh
             if (::session.isInitialized) {
@@ -72,6 +80,49 @@ class FalcoMediaService : MediaLibraryService() {
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(KEEP_COMMAND).add(LATER_COMMAND).add(REJECT_COMMAND).build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(commands)
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            val status = when (customCommand.customAction) {
+                ACTION_KEEP -> "KEEP"
+                ACTION_LATER -> "MAYBE"
+                ACTION_REJECT -> "REJECT"
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
+            }
+            val mediaId = args.getString(MediaConstants.EXTRA_KEY_MEDIA_ID)
+                ?: player.currentMediaItem?.mediaId
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            val id = mediaId.removePrefix("track:").toLongOrNull()
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            val current = tracks.firstOrNull { it.id == id }
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            val updated = current.copy(workStatus = status)
+            tracks = tracks.map { if (it.id == id) updated else it }
+            scope.launch { dao.update(updated) }
+
+            val next = tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
+            if (next != null) {
+                player.setMediaItem(reviewSong(next))
+                player.prepare()
+                player.play()
+            } else {
+                player.pause()
+            }
+            session.notifyChildrenChanged(REVIEW, childCount(REVIEW), null)
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
             Futures.immediateFuture(LibraryResult.ofItem(folder(ROOT, "Libreria FALCO"), params))
 
@@ -147,10 +198,17 @@ class FalcoMediaService : MediaLibraryService() {
         MediaMetadata.Builder().setTitle(title).setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build()
     ).build()
 
+    private fun reviewButtons() = listOf(
+        CommandButton.Builder().setDisplayName("Tieni").setIconResId(R.drawable.ic_auto_keep).setSessionCommand(KEEP_COMMAND).build(),
+        CommandButton.Builder().setDisplayName("Dopo").setIconResId(R.drawable.ic_auto_later).setSessionCommand(LATER_COMMAND).build(),
+        CommandButton.Builder().setDisplayName("Scarta").setIconResId(R.drawable.ic_auto_reject).setSessionCommand(REJECT_COMMAND).build()
+    )
+
     private fun reviewSong(track: TrackEntity): MediaItem {
         val suggestion = track.maestCache.takeIf { it.isNotBlank() }?.let { " • AI pronta" }.orEmpty()
         val metadata = MediaMetadata.Builder().setTitle(track.title).setArtist("${track.artist}$suggestion").setAlbumTitle("Revisione FALCO")
             .setGenre(track.genre).setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+            .setSupportedCommands(listOf(ACTION_KEEP, ACTION_LATER, ACTION_REJECT))
             .apply { if (track.durationMs > 0) setDurationMs(track.durationMs) }.build()
         return MediaItem.Builder().setMediaId("track:${track.id}").setUri(track.uri).setMediaMetadata(metadata).build()
     }
@@ -166,5 +224,11 @@ class FalcoMediaService : MediaLibraryService() {
         private const val TAG = "FalcoAuto"
         private const val ROOT = "root"; private const val ALL = "all"; private const val FAVORITES = "favorites"
         private const val GENRES = "genres"; private const val ARTISTS = "artists"; private const val READY = "ready"; private const val REVIEW = "review"
+        private const val ACTION_KEEP = "com.alessandro.falco.KEEP"
+        private const val ACTION_LATER = "com.alessandro.falco.LATER"
+        private const val ACTION_REJECT = "com.alessandro.falco.REJECT"
+        private val KEEP_COMMAND = SessionCommand(ACTION_KEEP, Bundle.EMPTY)
+        private val LATER_COMMAND = SessionCommand(ACTION_LATER, Bundle.EMPTY)
+        private val REJECT_COMMAND = SessionCommand(ACTION_REJECT, Bundle.EMPTY)
     }
 }
