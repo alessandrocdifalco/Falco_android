@@ -3,7 +3,6 @@
 package com.alessandro.falco.auto
 
 import android.net.Uri
-import android.os.Bundle
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
@@ -13,15 +12,11 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.LibraryResult
-import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
-import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
-import androidx.media3.session.SessionResult
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.data.TrackEntity
-import com.alessandro.falco.R
 import com.alessandro.falco.webdav.WebDavClient
 import com.alessandro.falco.webdav.WebDavStore
 import com.google.common.collect.ImmutableList
@@ -77,42 +72,6 @@ class FalcoMediaService : MediaLibraryService() {
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
-        private val keep = SessionCommand(ACTION_KEEP, Bundle.EMPTY)
-        private val maybe = SessionCommand(ACTION_MAYBE, Bundle.EMPTY)
-        private val reject = SessionCommand(ACTION_REJECT, Bundle.EMPTY)
-
-        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(keep).add(maybe).add(reject).build()
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(commands).build()
-        }
-
-        override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
-            super.onPostConnect(session, controller)
-            // Android Auto resolves icons from the application's resources. Framework
-            // android.R icons can make some head units reject the entire media session.
-            runCatching {
-                session.setCustomLayout(controller, listOf(
-                    actionButton("Tieni", R.drawable.ic_auto_keep, keep),
-                    actionButton("Dopo", R.drawable.ic_auto_later, maybe),
-                    actionButton("Scarta", R.drawable.ic_auto_reject, reject)
-                ))
-            }.onFailure { Log.e(TAG, "Unable to publish car review controls", it) }
-        }
-
-        override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
-            val status = when (customCommand.customAction) { ACTION_KEEP -> "KEEP"; ACTION_MAYBE -> "MAYBE"; ACTION_REJECT -> "REJECT"; else -> null }
-                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
-            val currentId = player.currentMediaItem?.mediaId?.removePrefix("track:")?.toLongOrNull()
-                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
-            val current = tracks.firstOrNull { it.id == currentId }
-                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
-            tracks = tracks.map { if (it.id == currentId) it.copy(workStatus = status) else it }
-            scope.launch { dao.update(current.copy(workStatus = status)) }
-            val next = tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
-            if (next != null) { player.setMediaItem(song(next)); player.prepare(); player.play() } else player.pause()
-            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-        }
-
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
             Futures.immediateFuture(LibraryResult.ofItem(folder(ROOT, "Libreria FALCO"), params))
 
@@ -188,9 +147,6 @@ class FalcoMediaService : MediaLibraryService() {
         MediaMetadata.Builder().setTitle(title).setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build()
     ).build()
 
-    private fun actionButton(label: String, icon: Int, command: SessionCommand) = CommandButton.Builder()
-        .setDisplayName(label).setIconResId(icon).setSessionCommand(command).build()
-
     private fun reviewSong(track: TrackEntity): MediaItem {
         val suggestion = track.maestCache.takeIf { it.isNotBlank() }?.let { " • AI pronta" }.orEmpty()
         val metadata = MediaMetadata.Builder().setTitle(track.title).setArtist("${track.artist}$suggestion").setAlbumTitle("Revisione FALCO")
@@ -210,6 +166,5 @@ class FalcoMediaService : MediaLibraryService() {
         private const val TAG = "FalcoAuto"
         private const val ROOT = "root"; private const val ALL = "all"; private const val FAVORITES = "favorites"
         private const val GENRES = "genres"; private const val ARTISTS = "artists"; private const val READY = "ready"; private const val REVIEW = "review"
-        private const val ACTION_KEEP = "com.alessandro.falco.KEEP"; private const val ACTION_MAYBE = "com.alessandro.falco.MAYBE"; private const val ACTION_REJECT = "com.alessandro.falco.REJECT"
     }
 }
