@@ -15,8 +15,6 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionError
-import com.alessandro.falco.ai.AiCache
-import com.alessandro.falco.ai.LocalAiEngine
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.data.FalcoTaxonomy
 import com.alessandro.falco.data.TaxonomyItem
@@ -38,7 +36,6 @@ class FalcoMediaService : MediaLibraryService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var tracks: List<TrackEntity> = emptyList()
     private val dao by lazy { FalcoDatabase.get(this).tracks() }
-    private val localAi by lazy { LocalAiEngine(this) }
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
 
@@ -59,7 +56,7 @@ class FalcoMediaService : MediaLibraryService() {
         scope.launch { dao.observeAll().collectLatest { fresh ->
             tracks = fresh
             if (::session.isInitialized) {
-                listOf(ROOT, REVIEW, AI_REVIEW, AI_CONFIDENT, AI_UNCERTAIN, AI_PENDING, ALL, FAVORITES, GENRES, ARTISTS, READY).forEach { parent ->
+                listOf(ROOT, REVIEW, ALL, FAVORITES, GENRES, ARTISTS, READY).forEach { parent ->
                     session.notifyChildrenChanged(parent, childCount(parent), null)
                 }
             }
@@ -82,16 +79,8 @@ class FalcoMediaService : MediaLibraryService() {
 
         override fun onGetChildren(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             val items = runCatching { when {
-                parentId == ROOT -> listOf(folder(REVIEW, "Revisione"), folder(AI_REVIEW, "Revisione AI"), folder(ALL, "Tutti i brani"), folder(FAVORITES, "Preferiti"), folder(GENRES, "Generi"), folder(ARTISTS, "Artisti"), folder(READY, "Pronti per il set"))
-                parentId == REVIEW -> reviewTracks().map(::reviewFolder)
-                parentId == AI_REVIEW -> listOf(
-                    folder(AI_CONFIDENT, "AI sicura · 70% o più"),
-                    folder(AI_UNCERTAIN, "AI incerta · sotto 70%"),
-                    folder(AI_PENDING, "Non ancora analizzati")
-                )
-                parentId == AI_CONFIDENT -> reviewTracks().filter { maestConfidence(it) >= 70 }.map(::reviewFolder)
-                parentId == AI_UNCERTAIN -> reviewTracks().filter { maestConfidence(it) in 1..69 }.map(::reviewFolder)
-                parentId == AI_PENDING -> reviewTracks().filter { maestConfidence(it) <= 0 }.map(::reviewFolder)
+                parentId == ROOT -> listOf(folder(REVIEW, "Revisione"), folder(ALL, "Tutti i brani"), folder(FAVORITES, "Preferiti"), folder(GENRES, "Generi"), folder(ARTISTS, "Artisti"), folder(READY, "Pronti per il set"))
+                parentId == REVIEW -> tracks.filter { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }.sortedByDescending { it.modifiedAt }.map(::reviewFolder)
                 parentId == ALL -> tracks.sortedBy { it.title.lowercase() }.map(::song)
                 parentId == FAVORITES -> tracks.filter { it.favorite }.sortedBy { it.title.lowercase() }.map(::song)
                 parentId == READY -> tracks.filter { it.workStatus == "PRONTO" || it.workStatus == "KEEP" }.sortedBy { it.title.lowercase() }.map(::song)
@@ -107,7 +96,6 @@ class FalcoMediaService : MediaLibraryService() {
                             reviewAction(track, "KEEP", "✓  TIENI"),
                             reviewAction(track, "MAYBE", "◷  DOPO"),
                             reviewAction(track, "REJECT", "✕  SCARTA"),
-                            aiFolder(track),
                             taxonomyFolder(track)
                         )
                     }.orEmpty()
@@ -117,10 +105,6 @@ class FalcoMediaService : MediaLibraryService() {
                     tracks.firstOrNull { it.id == id }?.let(::taxonomyCategories).orEmpty()
                 }
                 parentId.startsWith(TAXONOMY_CATEGORY_PREFIX) -> taxonomyValues(parentId)
-                parentId.startsWith(AI_TRACK_PREFIX) -> {
-                    val id = parentId.removePrefix(AI_TRACK_PREFIX).toLongOrNull()
-                    tracks.firstOrNull { it.id == id }?.let(::aiSuggestions).orEmpty()
-                }
                 else -> emptyList()
             } }.getOrElse {
                 Log.e(TAG, "Unable to load car library parent=$parentId", it)
@@ -169,10 +153,6 @@ class FalcoMediaService : MediaLibraryService() {
         return tracks.filter { listOf(it.title, it.artist, it.album, it.genre, it.customTags).any { value -> value.contains(q, true) } }.sortedBy { it.title.lowercase() }
     }
 
-    private fun reviewTracks() = tracks
-        .filter { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
-        .sortedByDescending { it.modifiedAt }
-
     /** Some OEM head units request pageSize=0 or use values large enough to overflow Int. */
     private fun <T> page(items: List<T>, requestedPage: Int, requestedSize: Int): List<T> {
         if (items.isEmpty()) return emptyList()
@@ -185,12 +165,8 @@ class FalcoMediaService : MediaLibraryService() {
     }
 
     private fun childCount(parent: String): Int = when (parent) {
-        ROOT -> 7
-        REVIEW -> reviewTracks().size
-        AI_REVIEW -> 3
-        AI_CONFIDENT -> reviewTracks().count { maestConfidence(it) >= 70 }
-        AI_UNCERTAIN -> reviewTracks().count { maestConfidence(it) in 1..69 }
-        AI_PENDING -> reviewTracks().count { maestConfidence(it) <= 0 }
+        ROOT -> 6
+        REVIEW -> tracks.count { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
         FAVORITES -> tracks.count { it.favorite }
         READY -> tracks.count { it.workStatus == "PRONTO" || it.workStatus == "KEEP" }
         GENRES -> tracks.map { it.genre }.distinct().size
@@ -206,8 +182,8 @@ class FalcoMediaService : MediaLibraryService() {
         .setMediaId("$REVIEW_TRACK_PREFIX${track.id}")
         .setMediaMetadata(MediaMetadata.Builder()
             .setTitle(track.title)
-            .setArtist(listOf(track.artist, aiSummary(track)).filter { it.isNotBlank() }.joinToString(" · "))
-            .setAlbumTitle("Apri: ascolta, scegli o modifica i tag")
+            .setArtist(track.artist)
+            .setAlbumTitle("Apri per ascoltare o scegliere")
             .setIsBrowsable(true).setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build())
         .build()
@@ -217,7 +193,7 @@ class FalcoMediaService : MediaLibraryService() {
         .setUri(track.uri)
         .setMediaMetadata(MediaMetadata.Builder()
             .setTitle("▶  ASCOLTA")
-            .setArtist(listOf(track.title, track.artist, aiSummary(track)).filter { it.isNotBlank() }.joinToString(" · "))
+            .setArtist("${track.title} · ${track.artist}")
             .setIsBrowsable(false).setIsPlayable(true)
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build())
         .build()
@@ -231,29 +207,6 @@ class FalcoMediaService : MediaLibraryService() {
         .build()
 
     private fun taxonomyFolder(track: TrackEntity) = folder("$TAXONOMY_ROOT_PREFIX${track.id}", "🏷  TASSONOMIA")
-
-    private fun aiFolder(track: TrackEntity) = folder("$AI_TRACK_PREFIX${track.id}", "✨  ${aiSummary(track).ifBlank { "AI non ancora pronta" }}")
-
-    private fun aiSuggestions(track: TrackEntity): List<MediaItem> {
-        val maest = AiCache.decodePrediction(track.maestCache)
-        val learned = runCatching { localAi.suggest(track, AiCache.decodeWaveform(track.waveformCache)) }.getOrNull()
-        val out = mutableListOf<MediaItem>()
-        maest?.genre?.let { out += taxonomyAction(track, "genre", TaxonomyItem(it, "MAEST genere: ${taxonomyLabel(it)} · ${maest.confidence}%")) }
-        maest?.subgenre?.takeIf { it != maest.genre }?.let { out += taxonomyAction(track, "subgenre", TaxonomyItem(it, "MAEST sottogenere: ${taxonomyLabel(it)}")) }
-        learned?.genre?.let { out += taxonomyAction(track, "genre", TaxonomyItem(it, "Imparata: ${taxonomyLabel(it)} · ${learned.confidence}%")) }
-        learned?.energy?.takeIf { it in 1..5 }?.let { out += taxonomyAction(track, "energy", TaxonomyItem("E$it", "Energia imparata: E$it")) }
-        learned?.rejectProbability?.let { probability -> out += folder("ai-info:reject:${track.id}", "Probabile scarto · $probability%") }
-        return out.ifEmpty { listOf(folder("ai-info:pending:${track.id}", "Analisi AI non ancora disponibile")) }
-    }
-
-    private fun maestConfidence(track: TrackEntity) = AiCache.decodePrediction(track.maestCache)?.confidence ?: 0
-
-    private fun aiSummary(track: TrackEntity): String {
-        val prediction = AiCache.decodePrediction(track.maestCache) ?: return ""
-        val genre = prediction.genre?.let(::taxonomyLabel) ?: "Analizzato"
-        val subgenre = prediction.subgenre?.takeIf { it != prediction.genre }?.let { " / ${taxonomyLabel(it)}" }.orEmpty()
-        return "AI: $genre$subgenre ${prediction.confidence}%"
-    }
 
     private fun taxonomyCategories(track: TrackEntity): List<MediaItem> {
         val tags = tagSet(track)
@@ -314,10 +267,6 @@ class FalcoMediaService : MediaLibraryService() {
             val id = mediaId.removePrefix(TAXONOMY_ROOT_PREFIX).toLongOrNull()
             return tracks.firstOrNull { it.id == id }?.let(::taxonomyFolder)
         }
-        if (mediaId.startsWith(AI_TRACK_PREFIX)) {
-            val id = mediaId.removePrefix(AI_TRACK_PREFIX).toLongOrNull()
-            return tracks.firstOrNull { it.id == id }?.let(::aiFolder)
-        }
         if (mediaId.startsWith(TAXONOMY_CATEGORY_PREFIX)) {
             val value = mediaId.removePrefix(TAXONOMY_CATEGORY_PREFIX)
             val id = value.substringAfter(':', "").toLongOrNull()
@@ -347,25 +296,9 @@ class FalcoMediaService : MediaLibraryService() {
         val current = tracks.firstOrNull { it.id == id } ?: return null
         val updated = current.copy(workStatus = status)
         tracks = tracks.map { if (it.id == id) updated else it }
-        scope.launch {
-            dao.update(updated)
-            val tags = tagSet(updated)
-            localAi.learn(
-                updated,
-                AiCache.decodeWaveform(updated.waveformCache),
-                updated.genre,
-                tags.firstOrNull { it.startsWith("SUB:") }?.removePrefix("SUB:").orEmpty(),
-                tags.firstOrNull { it.matches(Regex("E[1-5]")) }?.drop(1)?.toIntOrNull() ?: 0,
-                updated.rating,
-                status,
-                localAi.suggest(updated, AiCache.decodeWaveform(updated.waveformCache))
-            )
-        }
+        scope.launch { dao.update(updated) }
         session.notifyChildrenChanged(REVIEW, childCount(REVIEW), null)
-        session.notifyChildrenChanged(AI_CONFIDENT, childCount(AI_CONFIDENT), null)
-        session.notifyChildrenChanged(AI_UNCERTAIN, childCount(AI_UNCERTAIN), null)
-        session.notifyChildrenChanged(AI_PENDING, childCount(AI_PENDING), null)
-        return reviewTracks().firstOrNull()
+        return tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
     }
 
     private fun parseTaxonomyAction(mediaId: String): Triple<String, String, Long>? {
@@ -425,9 +358,6 @@ class FalcoMediaService : MediaLibraryService() {
         private const val TAG = "FalcoAuto"
         private const val ROOT = "root"; private const val ALL = "all"; private const val FAVORITES = "favorites"
         private const val GENRES = "genres"; private const val ARTISTS = "artists"; private const val READY = "ready"; private const val REVIEW = "review"
-        private const val AI_REVIEW = "ai-review"; private const val AI_CONFIDENT = "ai-confident"
-        private const val AI_UNCERTAIN = "ai-uncertain"; private const val AI_PENDING = "ai-pending"
-        private const val AI_TRACK_PREFIX = "ai-track:"
         private const val REVIEW_TRACK_PREFIX = "review-track:"
         private const val REVIEW_ACTION_PREFIX = "review-action:"
         private const val TAXONOMY_ROOT_PREFIX = "taxonomy-root:"
