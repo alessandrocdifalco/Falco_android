@@ -16,6 +16,8 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionError
 import com.alessandro.falco.data.FalcoDatabase
+import com.alessandro.falco.data.FalcoTaxonomy
+import com.alessandro.falco.data.TaxonomyItem
 import com.alessandro.falco.data.TrackEntity
 import com.alessandro.falco.webdav.WebDavClient
 import com.alessandro.falco.webdav.WebDavStore
@@ -93,10 +95,16 @@ class FalcoMediaService : MediaLibraryService() {
                             reviewListen(track),
                             reviewAction(track, "KEEP", "✓  TIENI"),
                             reviewAction(track, "MAYBE", "◷  DOPO"),
-                            reviewAction(track, "REJECT", "✕  SCARTA")
+                            reviewAction(track, "REJECT", "✕  SCARTA"),
+                            taxonomyFolder(track)
                         )
                     }.orEmpty()
                 }
+                parentId.startsWith(TAXONOMY_ROOT_PREFIX) -> {
+                    val id = parentId.removePrefix(TAXONOMY_ROOT_PREFIX).toLongOrNull()
+                    tracks.firstOrNull { it.id == id }?.let(::taxonomyCategories).orEmpty()
+                }
+                parentId.startsWith(TAXONOMY_CATEGORY_PREFIX) -> taxonomyValues(parentId)
                 else -> emptyList()
             } }.getOrElse {
                 Log.e(TAG, "Unable to load car library parent=$parentId", it)
@@ -128,7 +136,11 @@ class FalcoMediaService : MediaLibraryService() {
                     val (status, id) = action
                     applyReviewAction(id, status)?.let(::reviewSong)
                 } else {
-                    tracks.firstOrNull { requested.mediaId == "track:${it.id}" }?.let(::song)
+                    val taxonomy = parseTaxonomyAction(requested.mediaId)
+                    if (taxonomy != null) {
+                        val (type, value, id) = taxonomy
+                        applyTaxonomy(id, type, value)?.let(::reviewSong)
+                    } else tracks.firstOrNull { requested.mediaId == "track:${it.id}" }?.let(::song)
                 }
             }
             return Futures.immediateFuture(resolved)
@@ -194,11 +206,76 @@ class FalcoMediaService : MediaLibraryService() {
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build())
         .build()
 
+    private fun taxonomyFolder(track: TrackEntity) = folder("$TAXONOMY_ROOT_PREFIX${track.id}", "🏷  TASSONOMIA")
+
+    private fun taxonomyCategories(track: TrackEntity): List<MediaItem> {
+        val tags = tagSet(track)
+        val sub = tags.firstOrNull { it.startsWith("SUB:") }?.removePrefix("SUB:")
+        val energy = tags.firstOrNull { it.matches(Regex("E[1-5]")) }
+        return listOf(
+            taxonomyCategory(track, "genre", "Genere · ${taxonomyLabel(track.genre)}"),
+            taxonomyCategory(track, "subgenre", "Sottogenere · ${taxonomyLabel(sub.orEmpty())}"),
+            taxonomyCategory(track, "energy", "Energia · ${energy ?: "—"}"),
+            taxonomyCategory(track, "rating", "Rating · ${if (track.rating > 0) "★".repeat(track.rating) else "—"}"),
+            taxonomyCategory(track, "usage", "Uso / situazione"),
+            taxonomyCategory(track, "voice", "Voce"),
+            taxonomyCategory(track, "mood", "Mood"),
+            taxonomyCategory(track, "elements", "Elementi musicali")
+        )
+    }
+
+    private fun taxonomyCategory(track: TrackEntity, type: String, label: String) =
+        folder("$TAXONOMY_CATEGORY_PREFIX$type:${track.id}", label)
+
+    private fun taxonomyValues(parentId: String): List<MediaItem> {
+        val value = parentId.removePrefix(TAXONOMY_CATEGORY_PREFIX)
+        val type = value.substringBefore(':')
+        val id = value.substringAfter(':', "").toLongOrNull() ?: return emptyList()
+        val track = tracks.firstOrNull { it.id == id } ?: return emptyList()
+        val items = when (type) {
+            "genre" -> FalcoTaxonomy.genres
+            "subgenre" -> FalcoTaxonomy.subgenres[track.genre].orEmpty()
+            "energy" -> FalcoTaxonomy.energy
+            "rating" -> (1..5).map { TaxonomyItem(it.toString(), "★".repeat(it)) }
+            "usage" -> FalcoTaxonomy.usage
+            "voice" -> FalcoTaxonomy.voice
+            "mood" -> FalcoTaxonomy.tags.filter { it.id in MOOD_TAGS }
+            "elements" -> FalcoTaxonomy.tags.filter { it.id in ELEMENT_TAGS }
+            else -> emptyList()
+        }
+        return items.map { item -> taxonomyAction(track, type, item) }
+    }
+
+    private fun taxonomyAction(track: TrackEntity, type: String, item: TaxonomyItem): MediaItem {
+        val selected = taxonomySelected(track, type, item.id)
+        return MediaItem.Builder()
+            .setMediaId("$TAXONOMY_ACTION_PREFIX$type:${Uri.encode(item.id)}:${track.id}")
+            .setMediaMetadata(MediaMetadata.Builder()
+                .setTitle("${if (selected) "✓  " else ""}${item.label}")
+                .setArtist(track.title).setIsBrowsable(false).setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build())
+            .build()
+    }
+
     private fun resolveItem(mediaId: String): MediaItem? {
         tracks.firstOrNull { mediaId == "track:${it.id}" }?.let { return song(it) }
         if (mediaId.startsWith(REVIEW_TRACK_PREFIX)) {
             val id = mediaId.removePrefix(REVIEW_TRACK_PREFIX).toLongOrNull()
             return tracks.firstOrNull { it.id == id }?.let(::reviewFolder)
+        }
+        if (mediaId.startsWith(TAXONOMY_ROOT_PREFIX)) {
+            val id = mediaId.removePrefix(TAXONOMY_ROOT_PREFIX).toLongOrNull()
+            return tracks.firstOrNull { it.id == id }?.let(::taxonomyFolder)
+        }
+        if (mediaId.startsWith(TAXONOMY_CATEGORY_PREFIX)) {
+            val value = mediaId.removePrefix(TAXONOMY_CATEGORY_PREFIX)
+            val id = value.substringAfter(':', "").toLongOrNull()
+            val track = tracks.firstOrNull { it.id == id } ?: return null
+            return taxonomyCategory(track, value.substringBefore(':'), value.substringBefore(':').replaceFirstChar(Char::uppercase))
+        }
+        parseTaxonomyAction(mediaId)?.let { (type, value, id) ->
+            val track = tracks.firstOrNull { it.id == id } ?: return null
+            return taxonomyAction(track, type, TaxonomyItem(value, taxonomyLabel(value)))
         }
         val action = parseReviewAction(mediaId) ?: return null
         val track = tracks.firstOrNull { it.id == action.second } ?: return null
@@ -224,6 +301,44 @@ class FalcoMediaService : MediaLibraryService() {
         return tracks.firstOrNull { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
     }
 
+    private fun parseTaxonomyAction(mediaId: String): Triple<String, String, Long>? {
+        if (!mediaId.startsWith(TAXONOMY_ACTION_PREFIX)) return null
+        val raw = mediaId.removePrefix(TAXONOMY_ACTION_PREFIX)
+        val parts = raw.split(':', limit = 3)
+        if (parts.size != 3) return null
+        return Triple(parts[0], Uri.decode(parts[1]), parts[2].toLongOrNull() ?: return null)
+    }
+
+    private fun applyTaxonomy(id: Long, type: String, value: String): TrackEntity? {
+        val current = tracks.firstOrNull { it.id == id } ?: return null
+        val tags = tagSet(current).toMutableSet()
+        val updated = when (type) {
+            "genre" -> current.copy(genre = value, customTags = tags.filterNot { it.startsWith("SUB:") }.joinToString(","))
+            "subgenre" -> current.copy(customTags = (tags.filterNot { it.startsWith("SUB:") } + "SUB:$value").joinToString(","))
+            "energy" -> current.copy(customTags = (tags.filterNot { it.matches(Regex("E[1-5]")) } + value).joinToString(","))
+            "rating" -> current.copy(rating = value.toIntOrNull()?.coerceIn(1, 5) ?: current.rating)
+            "voice" -> current.copy(customTags = (tags.filterNot { it in VOICE_TAGS } + value).joinToString(","))
+            "usage", "mood", "elements" -> current.copy(customTags = toggle(tags, value).joinToString(","))
+            else -> current
+        }
+        tracks = tracks.map { if (it.id == id) updated else it }
+        scope.launch { dao.update(updated) }
+        session.notifyChildrenChanged("$TAXONOMY_ROOT_PREFIX$id", taxonomyCategories(updated).size, null)
+        session.notifyChildrenChanged("$TAXONOMY_CATEGORY_PREFIX$type:$id", taxonomyValues("$TAXONOMY_CATEGORY_PREFIX$type:$id").size, null)
+        return updated
+    }
+
+    private fun tagSet(track: TrackEntity) = track.customTags.split(',').filter { it.isNotBlank() }.toSet()
+    private fun toggle(tags: MutableSet<String>, value: String): Set<String> = tags.apply { if (!add(value)) remove(value) }
+    private fun taxonomySelected(track: TrackEntity, type: String, value: String): Boolean = when (type) {
+        "genre" -> track.genre == value
+        "subgenre" -> "SUB:$value" in tagSet(track)
+        "energy" -> value in tagSet(track)
+        "rating" -> track.rating == value.toIntOrNull()
+        else -> value in tagSet(track)
+    }
+    private fun taxonomyLabel(value: String) = value.ifBlank { "—" }.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)
+
     private fun reviewSong(track: TrackEntity): MediaItem {
         val suggestion = track.maestCache.takeIf { it.isNotBlank() }?.let { " • AI pronta" }.orEmpty()
         val metadata = MediaMetadata.Builder().setTitle(track.title).setArtist("${track.artist}$suggestion").setAlbumTitle("Revisione FALCO")
@@ -245,5 +360,11 @@ class FalcoMediaService : MediaLibraryService() {
         private const val GENRES = "genres"; private const val ARTISTS = "artists"; private const val READY = "ready"; private const val REVIEW = "review"
         private const val REVIEW_TRACK_PREFIX = "review-track:"
         private const val REVIEW_ACTION_PREFIX = "review-action:"
+        private const val TAXONOMY_ROOT_PREFIX = "taxonomy-root:"
+        private const val TAXONOMY_CATEGORY_PREFIX = "taxonomy-category:"
+        private const val TAXONOMY_ACTION_PREFIX = "taxonomy-action:"
+        private val MOOD_TAGS = setOf("GROOVY", "ELEGANTE", "SOLARE", "SCURO", "SEXY", "NOTTURNO", "CLASSIC_FEEL")
+        private val ELEMENT_TAGS = setOf("PIANO", "SAX", "FIATI", "CHITARRA", "BASSO_FORTE", "DUB", "PERCUSSIONI")
+        private val VOICE_TAGS = FalcoTaxonomy.voice.map { it.id }.toSet()
     }
 }
