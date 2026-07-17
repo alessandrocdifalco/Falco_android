@@ -31,6 +31,15 @@ compose.desktop {
         }
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
+            modules(
+                "java.desktop",
+                "java.logging",
+                "java.naming",
+                "java.net.http",
+                "java.sql",
+                "java.xml",
+                "jdk.unsupported"
+            )
             packageName = "FALCO"
             packageVersion = "0.1.0"
             description = "Fast Audio Library Catalog Organizer"
