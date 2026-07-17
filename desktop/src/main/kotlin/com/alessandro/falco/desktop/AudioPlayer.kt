@@ -1,24 +1,35 @@
 package com.alessandro.falco.desktop
 
-import javafx.application.Platform
-import javafx.scene.media.Media
-import javafx.scene.media.MediaPlayer
+import com.sun.jna.NativeLibrary
+import uk.co.caprica.vlcj.binding.support.runtime.RuntimeUtil
+import uk.co.caprica.vlcj.factory.MediaPlayerFactory
+import uk.co.caprica.vlcj.player.base.MediaPlayer
+import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.atomic.AtomicBoolean
 
+/** Audio-only LibVLC player. VLC and its codecs are bundled in the Windows installer. */
 class AudioPlayer {
+    private var factory: MediaPlayerFactory? = null
     private var player: MediaPlayer? = null
 
-    init { if (started.compareAndSet(false, true)) runCatching { Platform.startup {} } }
-
-    fun play(path: Path) = Platform.runLater {
-        player?.stop(); player?.dispose()
-        player = MediaPlayer(Media(path.toUri().toString())).apply { play() }
+    @Synchronized private fun ensurePlayer(): MediaPlayer {
+        player?.let { return it }
+        val resources = System.getProperty("compose.application.resources.dir")
+            ?: error("Cartella risorse del player non disponibile")
+        val vlc = Path.of(resources, "vlc").toAbsolutePath()
+        check(Files.exists(vlc.resolve("libvlc.dll"))) { "Motore VLC non incluso nell'installazione" }
+        NativeLibrary.addSearchPath(RuntimeUtil.getLibVlcLibraryName(), vlc.toString())
+        System.setProperty("VLC_PLUGIN_PATH", vlc.resolve("plugins").toString())
+        factory = MediaPlayerFactory("--no-video", "--quiet")
+        return factory!!.mediaPlayers().newMediaPlayer().also { player = it }
     }
 
-    fun pause() = Platform.runLater { player?.pause() }
-    fun stop() = Platform.runLater { player?.stop() }
+    @Synchronized fun play(path: Path) {
+        val media = ensurePlayer()
+        media.controls().stop()
+        check(media.media().play(path.toAbsolutePath().toString())) { "VLC non riesce ad aprire il file" }
+    }
 
-    companion object { private val started = AtomicBoolean(false) }
+    @Synchronized fun pause() { player?.controls()?.pause() }
+    @Synchronized fun stop() { player?.controls()?.stop() }
 }
-
