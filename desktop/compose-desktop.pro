@@ -9,3 +9,5 @@
 -keep class org.jaudiotagger.** { *; }
 -keep class okhttp3.** { *; }
 -keep class okio.** { *; }
+-keep class uk.co.caprica.vlcj.** { *; }
+-keep class com.sun.jna.** { *; }
