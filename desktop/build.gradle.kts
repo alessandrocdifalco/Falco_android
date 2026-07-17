@@ -19,6 +19,7 @@ dependencies {
     implementation("org.xerial:sqlite-jdbc:3.47.2.0")
     implementation("net.jthink:jaudiotagger:3.0.1")
     implementation("org.openjfx:javafx-base:21.0.5:win")
+    implementation("org.openjfx:javafx-graphics:21.0.5:win")
     implementation("org.openjfx:javafx-media:21.0.5:win")
 }
 
@@ -40,4 +41,3 @@ compose.desktop {
         }
     }
 }
-
