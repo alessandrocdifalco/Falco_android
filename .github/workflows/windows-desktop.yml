@@ -6,6 +6,11 @@ on:
     paths:
       - 'desktop/**'
       - '.github/workflows/windows-desktop.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/windows-desktop.yml'
   workflow_dispatch:
 
 jobs:
@@ -32,4 +37,3 @@ jobs:
             desktop/build/compose/binaries/main-release/exe/*.exe
             desktop/build/compose/binaries/main-release/msi/*.msi
           if-no-files-found: error
-
