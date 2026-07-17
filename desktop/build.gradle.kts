@@ -26,6 +26,9 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "com.alessandro.falco.desktop.MainKt"
+        buildTypes.release.proguard {
+            configurationFiles.from(project.file("compose-desktop.pro"))
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
             packageName = "FALCO"
