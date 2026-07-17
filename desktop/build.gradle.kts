@@ -18,9 +18,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.xerial:sqlite-jdbc:3.47.2.0")
     implementation("net.jthink:jaudiotagger:3.0.1")
-    implementation("org.openjfx:javafx-base:21.0.5:win")
-    implementation("org.openjfx:javafx-graphics:21.0.5:win")
-    implementation("org.openjfx:javafx-media:21.0.5:win")
+    implementation("uk.co.caprica:vlcj:4.11.0")
 }
 
 compose.desktop {
@@ -40,6 +38,7 @@ compose.desktop {
                 "java.xml",
                 "jdk.unsupported"
             )
+            appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
             packageName = "FALCO"
             packageVersion = "0.1.0"
             description = "Fast Audio Library Catalog Organizer"
