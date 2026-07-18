@@ -1,0 +1,51 @@
+package com.alessandro.falco.ui
+
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.alessandro.falco.ui.screens.*
+
+private enum class Destination(val label: String, val icon: ImageVector) { Dashboard("Dashboard", Icons.Default.Dashboard), Review("Revisione", Icons.Default.LibraryMusic), Ai("AI", Icons.Default.Psychology), WebDav("WebDAV", Icons.Default.Folder), More("Altro", Icons.Default.Menu) }
+
+@Composable fun FalcoApp(vm: FalcoViewModel = viewModel()) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    var destination by rememberSaveable { mutableStateOf(Destination.Dashboard) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { it?.let(vm::addFolder) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.startLibraryAnalysis() }
+    val backupWriter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { it?.let(vm::exportBackup) }
+    val backupReader = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importBackup) }
+    val startLibraryAnalysis = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else vm.startLibraryAnalysis()
+    }
+    Scaffold(
+        topBar = { PerformanceBar(state, vm::cancelLibraryAnalysis) },
+        bottomBar = {
+            NavigationBar(tonalElevation = 0.dp) { Destination.entries.forEach { d -> NavigationBarItem(selected = destination == d, onClick = { destination = d }, icon = { Icon(d.icon, null) }, label = { Text(d.label) }) } }
+        }
+    ) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            when (destination) {
+                Destination.Dashboard -> DashboardScreen(state, { folderPicker.launch(null) }, vm::scan)
+                Destination.Review -> ReviewScreen(state, vm::preview, vm::play, vm::seekTrack, vm::skipTrack, vm::review, vm::undoReview, vm::loadWaveform)
+                Destination.Ai -> AiLearningScreen(state)
+                Destination.WebDav -> WebDavScreen(state, vm::saveWebDav, vm::testWebDav, vm::browseWebDav, vm::scanWebDav, vm::playWebDav)
+                Destination.More -> SettingsScreen(state, vm.folders(), { folderPicker.launch(null) }, vm::scan, vm::removeFolder, vm::downloadMaest, vm::removeMaest, startLibraryAnalysis, vm::cancelLibraryAnalysis, vm::setAnalysisParallelism, vm::setAutomaticPerformanceScaling, vm::resetDatabase, { backupWriter.launch("falco-backup.json") }, { backupReader.launch(arrayOf("application/json")) })
+            }
+            state.selected?.let { DetailSheet(it, vm::select, vm::save, vm::play) }
+            if (destination != Destination.Review) state.playing?.let { MiniPlayer(it, state.isPlaying, state.position, vm::play, vm::seek) }
+        }
+    }
+}

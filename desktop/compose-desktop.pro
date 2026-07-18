@@ -1,0 +1,13 @@
+-dontwarn **
+
+-keep class com.alessandro.falco.desktop.** { *; }
+-keep class javafx.** { *; }
+-keep class com.sun.javafx.** { *; }
+-keep class com.sun.glass.** { *; }
+-keep class com.sun.media.** { *; }
+-keep class org.sqlite.** { *; }
+-keep class org.jaudiotagger.** { *; }
+-keep class okhttp3.** { *; }
+-keep class okio.** { *; }
+-keep class uk.co.caprica.vlcj.** { *; }
+-keep class com.sun.jna.** { *; }

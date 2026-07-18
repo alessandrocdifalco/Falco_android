@@ -1,0 +1,46 @@
+name: Windows desktop build
+
+on:
+  push:
+    branches: [agent/native-falco-v1]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/windows-desktop.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/windows-desktop.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Bundle VLC audio engine
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force desktop/resources/windows | Out-Null
+          Invoke-WebRequest 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip' -OutFile desktop/vlc.zip
+          Expand-Archive desktop/vlc.zip -DestinationPath desktop/resources/windows -Force
+          Rename-Item desktop/resources/windows/vlc-3.0.21 vlc
+      - name: Test and package Windows installers
+        working-directory: desktop
+        run: gradle clean test packageReleaseExe packageReleaseMsi --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: falco-windows-installers
+          path: |
+            desktop/build/compose/binaries/main-release/exe/*.exe
+            desktop/build/compose/binaries/main-release/msi/*.msi
+          if-no-files-found: error
