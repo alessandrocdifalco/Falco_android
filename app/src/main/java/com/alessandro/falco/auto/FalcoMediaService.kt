@@ -3,6 +3,7 @@
 package com.alessandro.falco.auto
 
 import android.net.Uri
+import android.os.Bundle
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
@@ -11,10 +12,13 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
 import com.alessandro.falco.data.FalcoDatabase
 import com.alessandro.falco.data.FalcoTaxonomy
 import com.alessandro.falco.data.TaxonomyItem
@@ -38,6 +42,10 @@ class FalcoMediaService : MediaLibraryService() {
     private val dao by lazy { FalcoDatabase.get(this).tracks() }
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
+
+    private val keepCommand = SessionCommand(ACTION_KEEP, Bundle.EMPTY)
+    private val laterCommand = SessionCommand(ACTION_LATER, Bundle.EMPTY)
+    private val rejectCommand = SessionCommand(ACTION_REJECT, Bundle.EMPTY)
 
     override fun onCreate() {
         super.onCreate()
@@ -74,13 +82,49 @@ class FalcoMediaService : MediaLibraryService() {
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            val base = super.onConnect(session, controller)
+            val commands = base.availableSessionCommands.buildUpon()
+                .add(keepCommand)
+                .add(laterCommand)
+                .add(rejectCommand)
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailablePlayerCommands(base.availablePlayerCommands)
+                .setAvailableSessionCommands(commands)
+                .setCustomLayout(reviewButtons())
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            val status = when (customCommand.customAction) {
+                ACTION_KEEP -> "KEEP"
+                ACTION_LATER -> "MAYBE"
+                ACTION_REJECT -> "REJECT"
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
+            }
+            val id = player.currentMediaItem?.mediaId
+                ?.takeIf { it.startsWith(REVIEW_PLAY_PREFIX) }
+                ?.removePrefix(REVIEW_PLAY_PREFIX)
+                ?.toLongOrNull()
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            applyReviewAndAdvance(id, status)
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
             Futures.immediateFuture(LibraryResult.ofItem(folder(ROOT, "Libreria FALCO"), params))
 
         override fun onGetChildren(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             val items = runCatching { when {
                 parentId == ROOT -> listOf(folder(REVIEW, "Revisione"), folder(ALL, "Tutti i brani"), folder(FAVORITES, "Preferiti"), folder(GENRES, "Generi"), folder(ARTISTS, "Artisti"), folder(READY, "Pronti per il set"))
-                parentId == REVIEW -> tracks.filter { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }.sortedByDescending { it.modifiedAt }.map(::reviewFolder)
+                // One tap opens playback: review is a continuous queue, not a tree of track folders.
+                parentId == REVIEW -> reviewTracks().map(::reviewSong)
                 parentId == ALL -> tracks.sortedBy { it.title.lowercase() }.map(::song)
                 parentId == FAVORITES -> tracks.filter { it.favorite }.sortedBy { it.title.lowercase() }.map(::song)
                 parentId == READY -> tracks.filter { it.workStatus == "PRONTO" || it.workStatus == "KEEP" }.sortedBy { it.title.lowercase() }.map(::song)
@@ -130,6 +174,19 @@ class FalcoMediaService : MediaLibraryService() {
         }
 
         override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: List<MediaItem>): ListenableFuture<List<MediaItem>> {
+            // Starting a review track builds the entire remaining review queue.
+            if (mediaItems.size == 1) {
+                val selectedId = mediaItems.first().mediaId
+                    .takeIf { it.startsWith(REVIEW_PLAY_PREFIX) }
+                    ?.removePrefix(REVIEW_PLAY_PREFIX)
+                    ?.toLongOrNull()
+                val review = reviewTracks()
+                val selectedIndex = review.indexOfFirst { it.id == selectedId }
+                if (selectedIndex >= 0) {
+                    val ordered = review.drop(selectedIndex) + review.take(selectedIndex)
+                    return Futures.immediateFuture(ordered.map(::reviewSong))
+                }
+            }
             val resolved = mediaItems.mapNotNull { requested ->
                 val action = parseReviewAction(requested.mediaId)
                 if (action != null) {
@@ -146,6 +203,36 @@ class FalcoMediaService : MediaLibraryService() {
             return Futures.immediateFuture(resolved)
         }
     }
+
+    private fun reviewButtons(): ImmutableList<CommandButton> = ImmutableList.of(
+        CommandButton.Builder()
+            .setDisplayName("Tieni")
+            .setIconResId(com.alessandro.falco.R.drawable.ic_auto_keep)
+            .setSessionCommand(keepCommand)
+            .build(),
+        CommandButton.Builder()
+            .setDisplayName("Dopo")
+            .setIconResId(com.alessandro.falco.R.drawable.ic_auto_later)
+            .setSessionCommand(laterCommand)
+            .build(),
+        CommandButton.Builder()
+            .setDisplayName("Scarta")
+            .setIconResId(com.alessandro.falco.R.drawable.ic_auto_reject)
+            .setSessionCommand(rejectCommand)
+            .build()
+    )
+
+    private fun applyReviewAndAdvance(id: Long, status: String) {
+        applyReviewAction(id, status) ?: return
+        val currentIndex = player.currentMediaItemIndex
+        if (currentIndex !in 0 until player.mediaItemCount) return
+        player.removeMediaItem(currentIndex)
+        if (player.mediaItemCount == 0) player.stop() else player.play()
+    }
+
+    private fun reviewTracks() = tracks
+        .filter { it.workStatus == "DA_VALUTARE" || it.workStatus == "DA_TAGGARE" }
+        .sortedByDescending { it.modifiedAt }
 
     private fun search(query: String): List<TrackEntity> {
         val q = query.trim()
@@ -259,6 +346,10 @@ class FalcoMediaService : MediaLibraryService() {
 
     private fun resolveItem(mediaId: String): MediaItem? {
         tracks.firstOrNull { mediaId == "track:${it.id}" }?.let { return song(it) }
+        if (mediaId.startsWith(REVIEW_PLAY_PREFIX)) {
+            val id = mediaId.removePrefix(REVIEW_PLAY_PREFIX).toLongOrNull()
+            return tracks.firstOrNull { it.id == id }?.let(::reviewSong)
+        }
         if (mediaId.startsWith(REVIEW_TRACK_PREFIX)) {
             val id = mediaId.removePrefix(REVIEW_TRACK_PREFIX).toLongOrNull()
             return tracks.firstOrNull { it.id == id }?.let(::reviewFolder)
@@ -344,7 +435,7 @@ class FalcoMediaService : MediaLibraryService() {
         val metadata = MediaMetadata.Builder().setTitle(track.title).setArtist("${track.artist}$suggestion").setAlbumTitle("Revisione FALCO")
             .setGenre(track.genre).setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .apply { if (track.durationMs > 0) setDurationMs(track.durationMs) }.build()
-        return MediaItem.Builder().setMediaId("track:${track.id}").setUri(track.uri).setMediaMetadata(metadata).build()
+        return MediaItem.Builder().setMediaId("$REVIEW_PLAY_PREFIX${track.id}").setUri(track.uri).setMediaMetadata(metadata).build()
     }
 
     private fun song(track: TrackEntity): MediaItem {
@@ -359,10 +450,14 @@ class FalcoMediaService : MediaLibraryService() {
         private const val ROOT = "root"; private const val ALL = "all"; private const val FAVORITES = "favorites"
         private const val GENRES = "genres"; private const val ARTISTS = "artists"; private const val READY = "ready"; private const val REVIEW = "review"
         private const val REVIEW_TRACK_PREFIX = "review-track:"
+        private const val REVIEW_PLAY_PREFIX = "review-play:"
         private const val REVIEW_ACTION_PREFIX = "review-action:"
         private const val TAXONOMY_ROOT_PREFIX = "taxonomy-root:"
         private const val TAXONOMY_CATEGORY_PREFIX = "taxonomy-category:"
         private const val TAXONOMY_ACTION_PREFIX = "taxonomy-action:"
+        private const val ACTION_KEEP = "com.alessandro.falco.action.KEEP"
+        private const val ACTION_LATER = "com.alessandro.falco.action.LATER"
+        private const val ACTION_REJECT = "com.alessandro.falco.action.REJECT"
         private val MOOD_TAGS = setOf("GROOVY", "ELEGANTE", "SOLARE", "SCURO", "SEXY", "NOTTURNO", "CLASSIC_FEEL")
         private val ELEMENT_TAGS = setOf("PIANO", "SAX", "FIATI", "CHITARRA", "BASSO_FORTE", "DUB", "PERCUSSIONI")
         private val VOICE_TAGS = FalcoTaxonomy.voice.map { it.id }.toSet()
