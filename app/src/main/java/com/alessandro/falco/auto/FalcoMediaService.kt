@@ -2,8 +2,10 @@
 
 package com.alessandro.falco.auto
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
@@ -94,6 +96,27 @@ class FalcoMediaService : MediaLibraryService() {
                 .setAvailableSessionCommands(commands)
                 .setCustomLayout(reviewButtons())
                 .build()
+        }
+
+        override fun onMediaButtonEvent(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+            intent: Intent
+        ): Boolean {
+            val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
+            if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return true
+            return when (event.keyCode) {
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+                    true
+                }
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
+                    else player.seekTo(0)
+                    true
+                }
+                else -> super.onMediaButtonEvent(session, controllerInfo, intent)
+            }
         }
 
         override fun onCustomCommand(
