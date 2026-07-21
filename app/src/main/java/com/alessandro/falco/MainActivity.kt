@@ -253,8 +253,10 @@ class MainActivity : ComponentActivity() {
             }
             OutlinedButton(onClick = { showPlaylistDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("+ AGGIUNGI A PLAYLIST") }
         }
-        if (showPlaylistDialog) AddToPlaylistDialog(track, loadPlaylists().keys.toList(), { showPlaylistDialog = false }) { name ->
-            onAddToPlaylist(name, track); showPlaylistDialog = false
+        if (showPlaylistDialog) track?.let { playlistTrack ->
+            AddToPlaylistDialog(playlistTrack, loadPlaylists().keys.toList(), { showPlaylistDialog = false }) { name ->
+                onAddToPlaylist(name, playlistTrack); showPlaylistDialog = false
+            }
         }
     }
 
@@ -428,7 +430,7 @@ class MainActivity : ComponentActivity() {
     private fun saveReviewStates(states: Map<Long, ReviewState>) = prefs.edit().apply { states.forEach { (id, state) -> putString("review_$id", state.name) } }.apply()
 
     private fun loadPlaylists(): Map<String, Set<Long>> = prefs.all.mapNotNull { (key, value) ->
-        if (!key.startsWith("playlist_")) null else key.removePrefix("playlist_") to ((value as? Set<*>)?.mapNotNull { it.toString().toLongOrNull() }?.toSet() ?: emptySet())
+        if (!key.startsWith("playlist_")) null else key.removePrefix("playlist_") to ((value as? Set<*>)?.mapNotNull { it.toString().toLongOrNull() }?.toSet() ?: emptySet<Long>())
     }.toMap()
 
     private fun savePlaylists(playlists: Map<String, Set<Long>>) = prefs.edit().apply {
